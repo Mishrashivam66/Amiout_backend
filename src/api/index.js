@@ -7,10 +7,14 @@ let isConnected = false;
 
 module.exports = async (req, res) => {
   try {
+    console.log("Function invoked");
+    console.log("NODE_ENV:", process.env.NODE_ENV);
+    console.log("MONGODB_URI exists:", !!process.env.MONGODB_URI);
+    console.log("DB_NAME:", process.env.DB_NAME);
+
     if (!isConnected) {
       await connectDatabase();
       isConnected = true;
-      console.log("✅ MongoDB Connected");
     }
 
     return app(req, res);
@@ -19,11 +23,8 @@ module.exports = async (req, res) => {
 
     return res.status(500).json({
       success: false,
-      message: "Internal Server Error",
-      error:
-        process.env.NODE_ENV === "development"
-          ? error.message
-          : "Function crashed",
+      message: error.message,
+      stack: error.stack,
     });
   }
 };

@@ -10,6 +10,7 @@ const errorHandler = require("./middlewares/error.middleware");
 // ==========================================
 // ROUTES
 // ==========================================
+
 const notificationRoutes = require("./modules/notification/routes/notificationRoutes");
 const authRoutes = require("./modules/auth/routes/auth.routes");
 const mentorAuthRoutes = require("./modules/auth/routes/mentor.routes");
@@ -38,30 +39,15 @@ app.use(
   cors({
     origin: true,
     credentials: true,
-    // methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    // allowedHeaders: ["Content-Type", "Authorization"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   }),
 );
 
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", "*");
-  res.header(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-  );
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
-  );
-
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
-  }
-
-  next();
-});
+app.options("*", cors());
 
 app.use(helmet());
+
 app.use(compression());
 
 if (process.env.NODE_ENV === "development") {
@@ -69,6 +55,7 @@ if (process.env.NODE_ENV === "development") {
 }
 
 app.use(express.json());
+
 app.use(express.urlencoded({ extended: true }));
 
 // ==========================================
@@ -88,6 +75,7 @@ app.get("/", (req, res) => {
 // ==========================================
 
 app.use("/api/v1/auth", authRoutes);
+
 app.use("/api/v1/auth/mentor", mentorAuthRoutes);
 
 app.use("/api/v1/student", studentRoutes);
@@ -104,8 +92,10 @@ app.use("/api/v1/outpass", outpassRoutes);
 
 app.use("/api/v1/notifications", notificationRoutes);
 
+app.use("/api/v1/student", studentRoutes);
+
 // ==========================================
-// 404 HANDLER
+// 404
 // ==========================================
 
 app.use((req, res) => {
@@ -116,13 +106,9 @@ app.use((req, res) => {
 });
 
 // ==========================================
-// GLOBAL ERROR HANDLER
+// ERROR HANDLER
 // ==========================================
 
 app.use(errorHandler);
-
-// ==========================================
-// EXPORT
-// ==========================================
 
 module.exports = app;

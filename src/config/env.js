@@ -1,12 +1,3 @@
-const dotenv = require("dotenv");
-const path = require("path");
-
-// ==========================================
-// LOAD ENV
-// ==========================================
-
-dotenv.config({
-  path: path.resolve(process.cwd(), ".env"),
-});
+require("dotenv").config();
 
 module.exports = process.env;

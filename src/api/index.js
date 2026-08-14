@@ -1,4 +1,4 @@
-require("../config/env");
+// require("../config/env");
 
 const connectDatabase = require("../config/db");
 const app = require("../app");

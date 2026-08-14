@@ -21,15 +21,6 @@ console.log("G. cookie-parser loaded");
 const errorHandler = require("./middlewares/error.middleware");
 console.log("H. error middleware loaded");
 
-const express = require("express");
-const cors = require("cors");
-const helmet = require("helmet");
-const compression = require("compression");
-const morgan = require("morgan");
-const cookieParser = require("cookie-parser");
-
-const errorHandler = require("./middlewares/error.middleware");
-
 // ==========================================
 // ROUTES
 // ==========================================

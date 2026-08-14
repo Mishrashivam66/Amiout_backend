@@ -1,31 +1,35 @@
 require("../config/env");
 
-console.log("1. env loaded");
-
 const connectDatabase = require("../config/db");
-console.log("2. db loaded");
-
 const app = require("../app");
-console.log("3. app loaded");
 
 let isConnected = false;
 
 module.exports = async (req, res) => {
   try {
-    console.log("4. function called");
+    console.log("Function called:", req.method, req.url);
 
     if (!isConnected) {
-      console.log("5. connecting db");
+      console.log("Connecting DB...");
       await connectDatabase();
-      console.log("6. db connected");
+      console.log("DB Connected");
       isConnected = true;
     }
 
-    console.log("7. calling app");
+    // Sirf test ke liye
+    if (req.url === "/test") {
+      return res.status(200).json({
+        success: true,
+        message: "Function + MongoDB OK",
+      });
+    }
+
     return app(req, res);
   } catch (err) {
-    console.error(err);
+    console.error("FULL ERROR:", err);
+
     return res.status(500).json({
+      success: false,
       error: err.message,
       stack: err.stack,
     });

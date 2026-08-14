@@ -2,34 +2,38 @@ const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
 
-const uploadPath = path.join(__dirname, "../../uploads/imports");
-
 // ============================================================================
-// Create Upload Directory
+// STORAGE
 // ============================================================================
 
-if (!fs.existsSync(uploadPath)) {
-  fs.mkdirSync(uploadPath, {
-    recursive: true,
+let storage;
+
+if (process.env.VERCEL === "1") {
+  // Vercel Serverless
+  storage = multer.memoryStorage();
+} else {
+  // Local Development
+  const uploadPath = path.join(__dirname, "../../uploads/imports");
+
+  if (!fs.existsSync(uploadPath)) {
+    fs.mkdirSync(uploadPath, {
+      recursive: true,
+    });
+  }
+
+  storage = multer.diskStorage({
+    destination(req, file, cb) {
+      cb(null, uploadPath);
+    },
+
+    filename(req, file, cb) {
+      const uniqueName =
+        Date.now() + "-" + file.originalname.replace(/\s+/g, "_");
+
+      cb(null, uniqueName);
+    },
   });
 }
-
-// ============================================================================
-// Storage
-// ============================================================================
-
-const storage = multer.diskStorage({
-  destination(req, file, cb) {
-    cb(null, uploadPath);
-  },
-
-  filename(req, file, cb) {
-    const uniqueName =
-      Date.now() + "-" + file.originalname.replace(/\s+/g, "_");
-
-    cb(null, uniqueName);
-  },
-});
 
 // ============================================================================
 // Excel Filter
@@ -65,9 +69,7 @@ const pdfFilter = (req, file, cb) => {
 
 const uploadExcel = multer({
   storage,
-
   fileFilter: excelFilter,
-
   limits: {
     fileSize: 10 * 1024 * 1024,
   },
@@ -79,20 +81,15 @@ const uploadExcel = multer({
 
 const uploadPDF = multer({
   storage,
-
   fileFilter: pdfFilter,
-
   limits: {
     fileSize: 10 * 1024 * 1024,
   },
 });
 
 // ============================================================================
-// Export
-// ============================================================================
 
 module.exports = Object.freeze({
   uploadExcel,
-
   uploadPDF,
 });

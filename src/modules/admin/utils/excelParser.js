@@ -1,6 +1,5 @@
 "use strict";
 
-
 const XLSX = require("xlsx");
 
 // ============================================================================
@@ -41,7 +40,9 @@ const parseExcel = (file) => {
   // Read Workbook
   // ==========================================================
 
-  const workbook = XLSX.readFile(file.path);
+  const workbook = file.buffer
+    ? XLSX.read(file.buffer, { type: "buffer" })
+    : XLSX.readFile(file.path);
 
   // ==========================================================
   // First Sheet
@@ -115,7 +116,9 @@ const parseExcel = (file) => {
 // ============================================================================
 
 const getWorkbookInfo = (file) => {
-  const workbook = XLSX.readFile(file.path);
+  const workbook = file.buffer
+    ? XLSX.read(file.buffer, { type: "buffer" })
+    : XLSX.readFile(file.path);
 
   return {
     totalSheets: workbook.SheetNames.length,

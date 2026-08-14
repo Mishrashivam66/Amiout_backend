@@ -1,12 +1,10 @@
 "use strict";
-const fs = require("fs");
 
+const fs = require("fs");
 const pdf = require("pdf-parse");
 
 const { normalizePDF } = require("./pdfNormalizer");
-
 const { extractHeader } = require("./pdfHeaderExtractor");
-
 const { extractStudents } = require("./pdfRowExtractor");
 
 // ============================================================================
@@ -17,7 +15,9 @@ const parsePDF = async (file) => {
   if (!file) {
     throw new Error("PDF file not found.");
   }
-  const buffer = fs.readFileSync(file.path);
+
+  const buffer = file.buffer || fs.readFileSync(file.path);
+
   const parsed = await pdf(buffer);
   const rawText = parsed.text || "";
 
@@ -28,28 +28,18 @@ const parsePDF = async (file) => {
   const normalizedText = normalizePDF(rawText);
   const header = extractHeader(normalizedText);
   const students = extractStudents(normalizedText);
+
   return {
     success: true,
-
     pages: parsed.numpages,
-
     version: parsed.version,
-
     header,
-
     totalStudents: students.length,
-
     students,
-
     rawText,
-
     normalizedText,
   };
 };
-
-// ============================================================================
-// Export
-// ============================================================================
 
 module.exports = Object.freeze({
   parsePDF,

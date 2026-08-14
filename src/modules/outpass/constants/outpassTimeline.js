@@ -1,0 +1,63 @@
+
+const OUTPASS_TIMELINE = Object.freeze({
+  APPLIED: "APPLIED",
+
+  APPROVED: "APPROVED",
+
+  REJECTED: "REJECTED",
+
+  QR_GENERATED: "QR_GENERATED",
+
+  EXIT_VERIFIED: "EXIT_VERIFIED",
+
+  ENTRY_VERIFIED: "ENTRY_VERIFIED",
+
+  COMPLETED: "COMPLETED",
+
+  CANCELLED: "CANCELLED",
+});
+
+
+const TIMELINE_SEQUENCE = Object.freeze([
+  OUTPASS_TIMELINE.APPLIED,
+  OUTPASS_TIMELINE.APPROVED,
+  OUTPASS_TIMELINE.QR_GENERATED,
+  OUTPASS_TIMELINE.EXIT_VERIFIED,
+  OUTPASS_TIMELINE.ENTRY_VERIFIED,
+  OUTPASS_TIMELINE.COMPLETED,
+]);
+
+const TIMELINE_LABELS = Object.freeze({
+  [OUTPASS_TIMELINE.APPLIED]: "Outpass Applied",
+
+  [OUTPASS_TIMELINE.APPROVED]: "Approved by Mentor",
+
+  [OUTPASS_TIMELINE.REJECTED]: "Rejected by Mentor",
+
+  [OUTPASS_TIMELINE.QR_GENERATED]: "QR Code Generated",
+
+  [OUTPASS_TIMELINE.EXIT_VERIFIED]: "Exit Verified",
+
+  [OUTPASS_TIMELINE.ENTRY_VERIFIED]: "Entry Verified",
+
+  [OUTPASS_TIMELINE.COMPLETED]: "Outpass Completed",
+
+  [OUTPASS_TIMELINE.CANCELLED]: "Request Cancelled",
+});
+
+// ============================================================================
+// Final Timeline Events
+// ============================================================================
+
+const FINAL_TIMELINE_EVENTS = Object.freeze([
+  OUTPASS_TIMELINE.REJECTED,
+  OUTPASS_TIMELINE.CANCELLED,
+  OUTPASS_TIMELINE.COMPLETED,
+]);
+
+module.exports = Object.freeze({
+  OUTPASS_TIMELINE,
+  TIMELINE_SEQUENCE,
+  TIMELINE_LABELS,
+  FINAL_TIMELINE_EVENTS,
+});

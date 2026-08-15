@@ -29,11 +29,6 @@ const findById = async (notificationId) => {
 // Get User Notifications
 // ============================================================================
 const getNotifications = async (receiverId, page = 1, limit = 10) => {
-  const data = await Notification.find({
-    receiver: receiverId,
-    isDeleted: false,
-  });
-
   return Notification.find({
     receiver: receiverId,
     isDeleted: false,

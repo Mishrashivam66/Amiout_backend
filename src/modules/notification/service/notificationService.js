@@ -1,16 +1,6 @@
 
 const notificationRepository = require("../repository/notificationRepository");
 
-// ============================================================================
-// Send Notification
-// ============================================================================
-// ============================================================================
-// Send Notification
-// ============================================================================
-// ============================================================================
-// Send Notification
-// ============================================================================
-
 const sendNotification = async ({
   title,
   message,
@@ -20,37 +10,23 @@ const sendNotification = async ({
   role,
   relatedOutpass = null,
 }) => {
-  /**
-   * Validate Receiver
-   */
+
   if (!receiver) {
     throw new Error("Notification receiver is required.");
   }
 
-  /**
-   * Validate Required Fields
-   */
   if (!type || !role) {
     throw new Error("Notification type and role are required.");
   }
 
-  /**
-   * Validate Title
-   */
   if (typeof title !== "string" || !title.trim()) {
     throw new Error("Notification title is required.");
   }
 
-  /**
-   * Validate Message
-   */
   if (typeof message !== "string" || !message.trim()) {
     throw new Error("Notification message is required.");
   }
 
-  /**
-   * Create Notification
-   */
   return notificationRepository.createNotification({
     title: title.trim(),
     message: message.trim(),

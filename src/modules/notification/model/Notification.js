@@ -117,7 +117,7 @@ notificationSchema.index({
 notificationSchema.index(
   { createdAt: 1 },
   {
-    expireAfterSeconds: 60 * 60 * 24,
+    expireAfterSeconds: 60 * 60 * 24 * 7,
     partialFilterExpression: {
       isDeleted: false,
     },

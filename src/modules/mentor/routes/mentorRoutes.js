@@ -31,6 +31,8 @@ router.get("/outpass/pending", mentorController.getPendingRequests);
 router.get("/outpass/approved", mentorController.getApprovedRequests);
 
 router.put("/profile", mentorController.updateProfile);
+
+router.patch("/availability", mentorController.updateAvailability);
 router.get("/outpass/rejected", mentorController.getRejectedRequests);
 router.get("/students/:studentId", mentorController.getStudentDetails);
 router.patch("/students/:studentId/unlock", mentorController.unlockStudent);

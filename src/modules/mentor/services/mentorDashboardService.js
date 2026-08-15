@@ -234,6 +234,43 @@ const updateProfile = async (mentorId, data) => {
 
   return mentor;
 };
+
+// ============================================================================
+// Update Mentor Availability
+// ============================================================================
+
+const updateAvailability = async (mentorId, availabilityStatus) => {
+  if (!["AVAILABLE", "UNAVAILABLE"].includes(availabilityStatus)) {
+    return {
+      success: false,
+      message: "Invalid availability status.",
+    };
+  }
+
+  const mentor = await Mentor.findById(mentorId);
+
+  if (!mentor) {
+    return {
+      success: false,
+      message: "Mentor not found.",
+    };
+  }
+
+  mentor.availabilityStatus = availabilityStatus;
+  mentor.availabilityUpdatedAt = new Date();
+
+  await mentor.save();
+
+  return {
+    success: true,
+    message: `Mentor marked as ${availabilityStatus}.`,
+    data: {
+      availabilityStatus: mentor.availabilityStatus,
+      availabilityUpdatedAt: mentor.availabilityUpdatedAt,
+    },
+  };
+};
+
 module.exports = Object.freeze({
   getDashboard,
   getPendingRequests,
@@ -245,4 +282,5 @@ module.exports = Object.freeze({
   getOutpassDetails,
   unlockStudent,
   updateProfile,
+  updateAvailability,
 });

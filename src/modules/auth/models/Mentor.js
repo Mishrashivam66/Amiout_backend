@@ -85,6 +85,17 @@ const mentorSchema = new mongoose.Schema(
       default: true,
     },
 
+    // Mentor availability for outpass routing
+    availabilityStatus: {
+      type: String,
+      enum: ["AVAILABLE", "UNAVAILABLE"],
+      default: "AVAILABLE",
+    },
+
+    availabilityUpdatedAt: {
+      type: Date,
+      default: Date.now,
+    },
     lastLogin: {
       type: Date,
       default: null,

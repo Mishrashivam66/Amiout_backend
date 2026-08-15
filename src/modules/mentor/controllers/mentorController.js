@@ -1,4 +1,3 @@
-
 const asyncHandler = require("express-async-handler");
 
 const mentorDashboardService = require("../services/mentorDashboardService");
@@ -154,7 +153,6 @@ const unlockStudent = asyncHandler(async (req, res) => {
 
 const updateProfile = async (req, res, next) => {
   try {
-  
     const result = await mentorDashboardService.updateProfile(
       req.user.id,
       req.body,
@@ -174,6 +172,19 @@ const updateProfile = async (req, res, next) => {
     });
   }
 };
+
+// ============================================================================
+// Update Mentor Availability
+// ============================================================================
+
+const updateAvailability = asyncHandler(async (req, res) => {
+  const result = await mentorDashboardService.updateAvailability(
+    req.user.id,
+    req.body.availabilityStatus,
+  );
+
+  return res.status(result.success ? 200 : 400).json(result);
+});
 module.exports = Object.freeze({
   getDashboard,
   getPendingRequests,
@@ -187,4 +198,5 @@ module.exports = Object.freeze({
   getOutpassDetails,
   unlockStudent,
   updateProfile,
+  updateAvailability,
 });

@@ -7,6 +7,7 @@ const userRoutes = require("./routes/user.routes");
 const importRoutes = require("./routes/import.routes");
 const reportRoutes = require("./routes/report.routes");
 const outpassRoutes = require("./routes/outpass.routes");
+const profileRoutes = require("./routes/profile.routes");
 
 const router = express.Router();
 
@@ -35,4 +36,8 @@ router.use("/reports", reportRoutes);
 // ============================================================================
 router.use("/outpasses", outpassRoutes);
 
+// ============================================================================
+// Admin Profile
+// ============================================================================
+router.use("/", profileRoutes);
 module.exports = Object.freeze(router);

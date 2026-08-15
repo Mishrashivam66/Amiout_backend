@@ -263,18 +263,40 @@ const applyOutpass = async (studentId, payload) => {
   // Send Mentor Notification
   // ============================================================
 
-  try {
-    await sendNotification({
-      title: "New Outpass Request",
-      message: `${student.name} has submitted a new outpass request.`,
-      type: NOTIFICATION_TYPES.OUTPASS_SUBMITTED,
-      sender: student._id,
-      receiver: profile.mentor,
-      role: NOTIFICATION_ROLES.MENTOR,
-      relatedOutpass: outpass._id,
-    });
-  } catch (error) {
-    console.error("Failed to send mentor notification:", error.message);
+  // ============================================================
+  // Mentor Availability Check
+  // ============================================================
+
+  const mentor = await authRepository.findUserById(profile.mentor);
+
+  if (mentor?.availabilityStatus === "UNAVAILABLE") {
+    try {
+      await sendNotification({
+        title: "Mentor Unavailable",
+        message: `${mentor.name} is unavailable. Student ${student.name} submitted an outpass request.`,
+        type: "MENTOR_UNAVAILABLE",
+        sender: student._id,
+        receiver: null, // Admin notification
+        role: NOTIFICATION_ROLES.ADMIN,
+        relatedOutpass: outpass._id,
+      });
+    } catch (err) {
+      console.error("Admin notification failed:", err.message);
+    }
+  } else {
+    try {
+      await sendNotification({
+        title: "New Outpass Request",
+        message: `${student.name} has submitted a new outpass request.`,
+        type: NOTIFICATION_TYPES.OUTPASS_SUBMITTED,
+        sender: student._id,
+        receiver: profile.mentor,
+        role: NOTIFICATION_ROLES.MENTOR,
+        relatedOutpass: outpass._id,
+      });
+    } catch (error) {
+      console.error("Failed to send mentor notification:", error.message);
+    }
   }
 
   // ============================================================

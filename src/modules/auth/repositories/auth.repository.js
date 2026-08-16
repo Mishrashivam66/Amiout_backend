@@ -122,7 +122,13 @@ const revokeAllUserTokens = async (userId) => {
     },
   );
 };
+const findUserByEnrollment = async (enrollmentNo) => {
+  return await User.findOne({ enrollmentNo });
+};
 
+const findUserByMobile = async (mobileNumber) => {
+  return await User.findOne({ mobileNumber });
+};
 // ==========================================
 // EXPORTS
 // ==========================================
@@ -132,6 +138,8 @@ module.exports = {
   createUser,
   findUserById,
   findUserByEmail,
+  findUserByEnrollment,
+  findUserByMobile,
   findVerifiedUserByEmail,
   updateUser,
   saveUser,

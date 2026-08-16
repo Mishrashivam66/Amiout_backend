@@ -1,10 +1,14 @@
 const {
   findUserByEmail,
+  findUserByEnrollment,
+  findUserByMobile,
   createUser,
   createOTP,
   deleteOTP,
 } = require("../repositories/auth.repository");
+const User = require("../models/User");
 
+const AppError = require("../../../utils/AppError");
 const StudentProfile = require("../../student/models/StudentProfile");
 const { sendEmail, generateOtpTemplate } = require("../utils/email");
 
@@ -40,10 +44,24 @@ const registerService = async (payload) => {
   // CHECK EXISTING USER
   // ==========================================
 
-  const existingUser = await findUserByEmail(email);
+  existingUser = await findUserByEmail(email);
 
   if (existingUser) {
-    throw new Error("User already exists.");
+    throw new AppError("User already exists with this email.", 409);
+  }
+  // ==========================================
+  // CHECK DUPLICATE ENROLLMENT
+  // ==========================================
+  const existingEnrollment = await findUserByEnrollment(enrollmentNo);
+
+  if (existingEnrollment) {
+    throw new AppError("Enrollment number already exists.", 409);
+  }
+
+  const existingMobile = await findUserByMobile(mobileNumber);
+
+  if (existingMobile) {
+    throw new AppError("Mobile number already exists.", 409);
   }
 
   // ==========================================

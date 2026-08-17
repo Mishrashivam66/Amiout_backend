@@ -2,7 +2,6 @@
 
 const asyncHandler = require("express-async-handler");
 
-
 const studentImportService = require("../../academic/services/studentImport.service");
 const mentorImportService = require("../../academic/services/mentorImport.service");
 const groupService = require("../../academic/services/group.service");
@@ -19,8 +18,8 @@ const { mapMentorRows } = require("../../academic/utils/mentorExcelMapper");
 
 const importStudents = asyncHandler(async (req, res) => {
   // ============================================================================
-// Parse + Validate Excel
-// ============================================================================
+  // Parse + Validate Excel
+  // ============================================================================
 
   const importResult = await importEngineService.processImport({
     file: req.file,
@@ -46,16 +45,16 @@ const importStudents = asyncHandler(async (req, res) => {
   });
 
   // ============================================================================
-// Save Students
-// ============================================================================
+  // Save Students
+  // ============================================================================
 
   const studentResult = await studentImportService.importStudents(
     importResult.validRecords,
   );
 
   // ============================================================================
-// Response
-// ============================================================================
+  // Response
+  // ============================================================================
 
   return res.status(201).json({
     success: true,
@@ -90,6 +89,7 @@ const importStudents = asyncHandler(async (req, res) => {
 // ============================================================================
 
 const importMentors = asyncHandler(async (req, res) => {
+  console.log("=========== IMPORT MENTOR API HIT ===========");
   try {
     const importResult = await importEngineService.processImport({
       file: req.file,

@@ -1,7 +1,9 @@
 const express = require("express");
 
+console.log("✅ academic/routes/index.js loaded");
 const router = express.Router();
 
+const testRoutes = require("./test.routes");
 const instituteRoutes = require("./institute.routes");
 const programRoutes = require("./program.routes");
 const studentImportRoutes = require("./studentImport.routes");
@@ -10,6 +12,7 @@ const mentorRoutes = require("./mentor.routes");
 const mappingRoutes = require("./mapping.routes");
 const groupRoutes = require("./group.routes");
 const testRoutes = require("./test.routes");
+console.log("✅ test.routes loaded");
 // ============================================================================
 // Academic Module Routes
 // ============================================================================

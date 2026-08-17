@@ -25,13 +25,11 @@ const importMentors = async (records = []) => {
     // ============================================================================
     // Required Fields
     // ============================================================================
-
     if (
       !mentor.mentorName ||
       !mentor.course ||
       !mentor.semester ||
-      !mentor.group ||
-      !mentor.mentorEmail
+      !mentor.group
     ) {
       failedMentors.push({
         mentor,

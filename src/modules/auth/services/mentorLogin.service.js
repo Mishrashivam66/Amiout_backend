@@ -75,8 +75,10 @@ const mentorLoginService = async (email, password) => {
   // ==========================================
 
   const mentorMaster = await MentorMaster.findOne({
-    name: mentor.name.trim(),
-  }).collation({ locale: "en", strength: 2 });
+    mentorEmail: mentor.email.trim().toLowerCase(),
+    isActive: true,
+    isDeleted: false,
+  });
 
   if (!mentorMaster) {
     throw new Error("MentorMaster mapping not found.");

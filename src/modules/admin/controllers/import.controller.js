@@ -89,8 +89,6 @@ const importStudents = asyncHandler(async (req, res) => {
 // ============================================================================
 
 const importMentors = asyncHandler(async (req, res) => {
-  console.log("===== CONTROLLER HIT =====");
-  console.log("File:", req.file);
   try {
     const importResult = await importEngineService.processImport({
       file: req.file,

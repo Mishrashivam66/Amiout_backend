@@ -25,6 +25,14 @@ const processImport = async ({
 
   const parsed = parseExcel(file);
 
+  console.log("================================");
+  console.log("HEADERS");
+  console.log(parsed.headers);
+
+  console.log("================================");
+  console.log("FIRST ROW");
+  console.log(parsed.data[0]);
+
   // ==========================================================
   // Validate
   // ==========================================================
@@ -34,7 +42,11 @@ const processImport = async ({
     requiredColumns,
     uniqueField,
   });
+  console.log("VALIDATION SUMMARY");
+  console.log(validation.summary);
 
+  console.log("VALIDATION ERRORS");
+  console.log(validation.validationErrors.slice(0, 10));
   // ==========================================================
   // Processing Time
   // ==========================================================

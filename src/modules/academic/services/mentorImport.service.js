@@ -30,7 +30,6 @@ const importMentors = async (records = []) => {
       !mentor.mentorName ||
       !mentor.course ||
       !mentor.semester ||
-      !mentor.section ||
       !mentor.group ||
       !mentor.mentorEmail
     ) {
@@ -48,9 +47,8 @@ const importMentors = async (records = []) => {
 
     const existingMentor = await mentorRepository.getMentorByDetails({
       mentorName: mentor.mentorName,
-      mentorEmail: mentor.mentorEmail,
+      mentorEmail: mentor.mentorEmail.toLowerCase(),
       semester: Number(mentor.semester),
-      section: mentor.section.toUpperCase(),
       group: mentor.group.toUpperCase(),
     });
 
@@ -73,8 +71,6 @@ const importMentors = async (records = []) => {
       course: mentor.course.toUpperCase(),
 
       semester: Number(mentor.semester),
-
-      section: mentor.section.toUpperCase(),
 
       mentorEmail: mentor.mentorEmail.toLowerCase(),
 

@@ -92,7 +92,6 @@ const mentorLoginService = async (email, password) => {
       },
     },
   );
-
   await updateMentor(mentor._id, {
     refreshToken,
     lastLogin: new Date(),

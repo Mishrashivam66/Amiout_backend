@@ -57,15 +57,18 @@ const mapMentor = async (userId) => {
   // ============================================================
   // Find Mentor Mapping
   // ============================================================
- 
+
   const mentorMaster = await MentorMaster.findOne({
     semester: student.semester,
     group,
     isActive: true,
     isDeleted: false,
   });
+  console.log("mentorMaster =", mentorMaster);
 
+  console.log("mentorUser =", mentorMaster?.mentorUser);
 
+  console.log("mentorUser._id =", mentorMaster?.mentorUser?._id);
 
   if (!mentorMaster) {
     throw new Error(
@@ -95,14 +98,16 @@ const mapMentor = async (userId) => {
   // ============================================================
   // Update Student Profile
   // ============================================================
-
+  console.log("mentorMaster.mentorUser =", mentorMaster.mentorUser);
   const updatedProfile = await profileRepository.updateProfile(userId, {
-    mentor: mentorMaster.mentorUser._id,
+    mentor: mentorMaster.mentorUser,
     profileCompleted: true,
     profileLocked: true,
     profileStatus: PROFILE_STATUS.LOCKED,
     lastProfileUpdatedAt: new Date(),
   });
+
+  console.log("updatedProfile =", updatedProfile);
 
   return {
     success: true,

@@ -40,6 +40,21 @@ const completeProfile = async (userId, payload) => {
     };
   }
 
+  if (!payload.mentorEmail) {
+    return {
+      success: false,
+      message: "Mentor email is required.",
+    };
+  }
+
+  const mentorEmail = payload.mentorEmail.trim().toLowerCase();
+
+  if (!mentorEmail.endsWith("@gwa.amity.edu")) {
+    return {
+      success: false,
+      message: "Please enter a valid Amity mentor email.",
+    };
+  }
   // ============================================================
   // Check Profile Exists
   // ============================================================
@@ -82,7 +97,7 @@ const completeProfile = async (userId, payload) => {
   const updatedProfile = await profileRepository.updateProfile(userId, {
     section: payload.section.toUpperCase(),
     group: payload.group.toUpperCase(),
-
+    mentorEmail: mentorEmail,
     parentName: payload.parentName.trim(),
     parentEmail: payload.parentEmail.trim().toLowerCase(),
     parentMobileNumber: payload.parentMobileNumber.toString().trim(),

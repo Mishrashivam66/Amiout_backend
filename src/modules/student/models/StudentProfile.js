@@ -27,6 +27,12 @@ const studentProfileSchema = new mongoose.Schema(
       default: null,
       index: true,
     },
+    mentorEmail: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: "",
+    },
     section: {
       type: String,
       trim: true,

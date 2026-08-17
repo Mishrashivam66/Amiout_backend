@@ -28,6 +28,7 @@ const importMentors = async (records = []) => {
 
     if (
       !mentor.mentorName ||
+      !mentor.Email ||
       !mentor.semester ||
       !mentor.section ||
       !mentor.group
@@ -64,13 +65,21 @@ const importMentors = async (records = []) => {
     // Ready For Insert
     // ============================================================================
 
+    // ============================================================================
+    // Ready For Insert
+    // ============================================================================
+
     mentorsToInsert.push({
       name: mentor.mentorName,
+      course: mentor.course.toUpperCase(),
       semester: Number(mentor.semester),
       section: mentor.section.toUpperCase(),
       group: mentor.group.toUpperCase(),
+
+      mentorEmail: mentor.email.toLowerCase(), // Excel ke Email column se
+
       coordinator: mentor.coordinator || "",
-      totalStudents: mentor.totalStudents || 0,
+      totalStudents: Number(mentor.totalStudents) || 0,
       isActive: true,
     });
   }

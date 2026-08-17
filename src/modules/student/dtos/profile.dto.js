@@ -18,6 +18,7 @@ const profileDTO = (user, profile) => {
     academic: {
       section: profile.section,
       group: profile.group,
+      mentorEmail: profile.mentorEmail,
     },
 
     mentor: profile.mentor

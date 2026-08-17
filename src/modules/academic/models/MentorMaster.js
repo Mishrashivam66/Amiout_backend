@@ -36,7 +36,13 @@ const mentorMasterSchema = new mongoose.Schema(
       trim: true,
       uppercase: true,
     },
-
+    mentorEmail: {
+      type: String,
+      required: true,
+      trim: true,
+      lowercase: true,
+      index: true,
+    },
     // ============================================================================
     // Group
     // ============================================================================

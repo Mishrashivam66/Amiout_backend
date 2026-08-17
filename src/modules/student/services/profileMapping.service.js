@@ -42,23 +42,11 @@ const mapMentor = async (userId) => {
   // Auto Detect Section From Group
   // ============================================================
 
-  let section = "";
-
-  if (group.startsWith("A")) {
-    section = "A";
-  } else if (group.startsWith("B")) {
-    section = "B";
-  } else if (group.startsWith("C")) {
-    section = "C";
-  } else {
-    throw new Error("Invalid student group.");
-  }
-
   // ============================================================
   // Find Mentor Mapping
   // ============================================================
-
   const mentorMaster = await MentorMaster.findOne({
+    mentorEmail: profile.mentorEmail.toLowerCase(),
     semester: student.semester,
     group,
     isActive: true,
@@ -67,39 +55,17 @@ const mapMentor = async (userId) => {
 
   if (!mentorMaster) {
     throw new Error(
-      `No mentor mapping found for Semester ${student.semester}, Section ${section}, Group ${group}.`,
+      "Invalid mentor email or mentor is not assigned to your group.",
     );
   }
 
   if (!mentorMaster.mentorUser) {
     throw new Error("Mentor has not registered yet.");
   }
-  // ============================================================
-  // Debug Logs
-  // ============================================================
-
-  console.log("===== MAP MENTOR =====");
-  console.log("Student ID:", userId);
-  console.log("Student Semester:", student.semester);
-  console.log("Student Group:", group);
-
-  console.log("MentorMaster:", mentorMaster);
-  console.log("Mentor User:", mentorMaster?.mentorUser);
-  console.log("Mentor User _id:", mentorMaster?.mentorUser?._id);
-
-  if (!mentorMaster) {
-    throw new Error(
-      `No mentor mapping found for Semester ${student.semester}, Section ${section}, Group ${group}.`,
-    );
-  }
-
-  // ============================================================
-  // Prevent Duplicate Mapping
-  // ============================================================
 
   if (
     profile.mentor &&
-    profile.mentor.toString() === mentorMaster.mentorUser._id.toString()
+    profile.mentor.toString() === mentorMaster.mentorUser.toString()
   ) {
     return {
       success: true,
@@ -108,26 +74,13 @@ const mapMentor = async (userId) => {
     };
   }
 
-  // ============================================================
-  // Update Student Profile
-  // ============================================================
   const updatedProfile = await profileRepository.updateProfile(userId, {
-    mentor: mentorMaster.mentorUser._id,
+    mentor: mentorMaster.mentorUser,
     profileCompleted: true,
     profileLocked: true,
     profileStatus: PROFILE_STATUS.LOCKED,
     lastProfileUpdatedAt: new Date(),
   });
-
-  console.log("Updated Profile:", updatedProfile);
-
-  return {
-    success: true,
-    message: "Mentor mapped successfully.",
-    data: updatedProfile,
-  };
-
-  console.log("updatedProfile =", updatedProfile);
 
   return {
     success: true,

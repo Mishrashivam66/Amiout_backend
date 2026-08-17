@@ -23,6 +23,12 @@ const mapMentorRows = (rows = []) => {
     group: row["group (as per amizone)"]?.trim().toUpperCase() || "",
 
     coordinator: row["name of class coordinator"]?.trim() || "",
+    section: row["section"]?.trim().toUpperCase() || "",
+
+    mentorEmail:
+      row["mentor email"]?.trim().toLowerCase() ||
+      row["email"]?.trim().toLowerCase() ||
+      "",
 
     totalStudents:
       Number(row["total no. of students"] || row["no.of students"]) || 0,

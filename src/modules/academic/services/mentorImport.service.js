@@ -28,10 +28,11 @@ const importMentors = async (records = []) => {
 
     if (
       !mentor.mentorName ||
-      !mentor.Email ||
+      !mentor.course ||
       !mentor.semester ||
       !mentor.section ||
-      !mentor.group
+      !mentor.group ||
+      !mentor.mentorEmail
     ) {
       failedMentors.push({
         mentor,
@@ -47,6 +48,7 @@ const importMentors = async (records = []) => {
 
     const existingMentor = await mentorRepository.getMentorByDetails({
       mentorName: mentor.mentorName,
+      mentorEmail: mentor.mentorEmail,
       semester: Number(mentor.semester),
       section: mentor.section.toUpperCase(),
       group: mentor.group.toUpperCase(),
@@ -65,21 +67,23 @@ const importMentors = async (records = []) => {
     // Ready For Insert
     // ============================================================================
 
-    // ============================================================================
-    // Ready For Insert
-    // ============================================================================
-
     mentorsToInsert.push({
       name: mentor.mentorName,
+
       course: mentor.course.toUpperCase(),
+
       semester: Number(mentor.semester),
+
       section: mentor.section.toUpperCase(),
+
+      mentorEmail: mentor.mentorEmail.toLowerCase(),
+
       group: mentor.group.toUpperCase(),
 
-      mentorEmail: mentor.email.toLowerCase(), // Excel ke Email column se
-
       coordinator: mentor.coordinator || "",
+
       totalStudents: Number(mentor.totalStudents) || 0,
+
       isActive: true,
     });
   }

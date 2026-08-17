@@ -117,9 +117,16 @@ const deleteMentor = (id) => {
 // Get Mentor By Details
 // ============================================================================
 
-const getMentorByDetails = ({ mentorName, semester, section, group }) => {
+const getMentorByDetails = ({
+  mentorName,
+  mentorEmail,
+  semester,
+  section,
+  group,
+}) => {
   return MentorMaster.findOne({
     name: mentorName,
+    mentorEmail,
     semester,
     section,
     group,

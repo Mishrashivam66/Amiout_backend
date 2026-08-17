@@ -3,7 +3,6 @@ const express = require("express");
 console.log("✅ academic/routes/index.js loaded");
 const router = express.Router();
 
-const testRoutes = require("./test.routes");
 const instituteRoutes = require("./institute.routes");
 const programRoutes = require("./program.routes");
 const studentImportRoutes = require("./studentImport.routes");

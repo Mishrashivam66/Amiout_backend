@@ -32,15 +32,15 @@ const mentorMasterSchema = new mongoose.Schema(
     },
     section: {
       type: String,
-      required: true,
+
       trim: true,
       uppercase: true,
     },
     mentorEmail: {
       type: String,
-      required: true,
       trim: true,
       lowercase: true,
+      default: "",
       index: true,
     },
     // ============================================================================

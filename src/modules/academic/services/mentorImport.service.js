@@ -90,7 +90,8 @@ const importMentors = async (records = []) => {
   // ============================================================================
   // Bulk Insert
   // ============================================================================
-
+  console.log("Mentors To Insert:");
+  console.dir(mentorsToInsert, { depth: null });
   let importedCount = 0;
   if (mentorsToInsert.length > 0) {
     try {

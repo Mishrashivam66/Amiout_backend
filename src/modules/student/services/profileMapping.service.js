@@ -58,11 +58,23 @@ const mapMentor = async (userId) => {
       "Invalid mentor email or mentor is not assigned to your group.",
     );
   }
-
+  // Mentor login nahi hua hai
   if (!mentorMaster.mentorUser) {
-    throw new Error("Mentor has not registered yet.");
+    const updatedProfile = await profileRepository.updateProfile(userId, {
+      profileCompleted: true,
+      profileLocked: false,
+      profileStatus: PROFILE_STATUS.COMPLETED,
+      lastProfileUpdatedAt: new Date(),
+    });
+
+    return {
+      success: true,
+      message: "Profile saved. Mentor account is not active yet.",
+      data: updatedProfile,
+    };
   }
 
+  // Already mapped
   if (
     profile.mentor &&
     profile.mentor.toString() === mentorMaster.mentorUser.toString()
@@ -74,6 +86,7 @@ const mapMentor = async (userId) => {
     };
   }
 
+  // Mentor available → map student
   const updatedProfile = await profileRepository.updateProfile(userId, {
     mentor: mentorMaster.mentorUser,
     profileCompleted: true,

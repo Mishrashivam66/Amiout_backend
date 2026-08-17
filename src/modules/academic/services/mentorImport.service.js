@@ -45,7 +45,7 @@ const importMentors = async (records = []) => {
 
     const existingMentor = await mentorRepository.getMentorByDetails({
       mentorName: mentor.mentorName,
-      mentorEmail: mentor.mentorEmail.toLowerCase(),
+      mentorEmail: mentor.mentorEmail ? mentor.mentorEmail.toLowerCase() : null,
       semester: Number(mentor.semester),
       group: mentor.group.toUpperCase(),
     });

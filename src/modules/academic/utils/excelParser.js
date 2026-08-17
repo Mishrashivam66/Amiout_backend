@@ -1,22 +1,41 @@
 const XLSX = require("xlsx");
 
-
 // ============================================================================
 // Parse Excel File
 // ============================================================================
-const parseExcel = (filePath) => {
-  const workbook = XLSX.readFile(filePath);
+const parseExcel = (file) => {
+  if (!file) {
+    throw new Error("Excel file not found.");
+  }
+
+  let workbook;
+
+  // Vercel (memoryStorage)
+  if (file.buffer) {
+    workbook = XLSX.read(file.buffer, {
+      type: "buffer",
+    });
+  }
+  // Local (diskStorage)
+  else if (file.path) {
+    workbook = XLSX.readFile(file.path);
+  } else {
+    throw new Error("Invalid uploaded file.");
+  }
 
   const sheetName = workbook.SheetNames[0];
 
   const worksheet = workbook.Sheets[sheetName];
 
-  const rows = XLSX.utils.sheet_to_json(worksheet, {
+  const data = XLSX.utils.sheet_to_json(worksheet, {
     raw: false,
     defval: "",
   });
 
-  return rows;
+  return {
+    headers: Object.keys(data[0] || {}),
+    data,
+  };
 };
 
 // ============================================================================
@@ -27,13 +46,7 @@ const normalizeHeaders = (rows = []) => {
     const normalized = {};
 
     Object.keys(row).forEach((key) => {
-      const formattedKey = key
-        .trim()
-        .replace(/\s+/g, "_")
-        .replace(/[()]/g, "")
-        .toLowerCase();
-
-      normalized[formattedKey] = row[key];
+      normalized[key.trim().toLowerCase()] = row[key];
     });
 
     return normalized;
@@ -51,20 +64,8 @@ const removeEmptyRows = (rows = []) => {
   );
 };
 
-// ============================================================================
-// Parse & Clean Excel
-// ============================================================================
-const parseAndNormalizeExcel = (filePath) => {
-  const rows = parseExcel(filePath);
-
-  const normalized = normalizeHeaders(rows);
-
-  return removeEmptyRows(normalized);
-};
-
 module.exports = Object.freeze({
   parseExcel,
   normalizeHeaders,
   removeEmptyRows,
-  parseAndNormalizeExcel,
 });

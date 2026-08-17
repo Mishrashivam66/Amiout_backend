@@ -64,12 +64,13 @@ const pdfFilter = (req, file, cb) => {
 };
 
 // ============================================================================
-// Upload Excel
-// ============================================================================
-
 const uploadExcel = multer({
   storage,
-  fileFilter: excelFilter,
+  fileFilter: (req, file, cb) => {
+    console.log("Multer received:", file);
+
+    return excelFilter(req, file, cb);
+  },
   limits: {
     fileSize: 10 * 1024 * 1024,
   },

@@ -2,11 +2,14 @@ const asyncHandler = require("express-async-handler");
 
 const mentorImportService = require("../services/mentorImport.service");
 
-
 // ============================================================================
 // Import Mentors
 // ============================================================================
 const importMentors = asyncHandler(async (req, res) => {
+  console.log("========== IMPORT ==========");
+  console.log("req.file =", req.file);
+  console.log("req.body =", req.body);
+
   const result = await mentorImportService.importMentors(req.body.mentors);
 
   return res.status(201).json({

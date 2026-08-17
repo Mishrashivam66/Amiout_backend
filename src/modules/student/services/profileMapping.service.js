@@ -64,11 +64,6 @@ const mapMentor = async (userId) => {
     isActive: true,
     isDeleted: false,
   });
-  console.log("mentorMaster =", mentorMaster);
-
-  console.log("mentorUser =", mentorMaster?.mentorUser);
-
-  console.log("mentorUser._id =", mentorMaster?.mentorUser?._id);
 
   if (!mentorMaster) {
     throw new Error(
@@ -78,6 +73,24 @@ const mapMentor = async (userId) => {
 
   if (!mentorMaster.mentorUser) {
     throw new Error("Mentor has not registered yet.");
+  }
+  // ============================================================
+  // Debug Logs
+  // ============================================================
+
+  console.log("===== MAP MENTOR =====");
+  console.log("Student ID:", userId);
+  console.log("Student Semester:", student.semester);
+  console.log("Student Group:", group);
+
+  console.log("MentorMaster:", mentorMaster);
+  console.log("Mentor User:", mentorMaster?.mentorUser);
+  console.log("Mentor User _id:", mentorMaster?.mentorUser?._id);
+
+  if (!mentorMaster) {
+    throw new Error(
+      `No mentor mapping found for Semester ${student.semester}, Section ${section}, Group ${group}.`,
+    );
   }
 
   // ============================================================
@@ -98,14 +111,21 @@ const mapMentor = async (userId) => {
   // ============================================================
   // Update Student Profile
   // ============================================================
-  console.log("mentorMaster.mentorUser =", mentorMaster.mentorUser);
   const updatedProfile = await profileRepository.updateProfile(userId, {
-    mentor: mentorMaster.mentorUser,
+    mentor: mentorMaster.mentorUser._id,
     profileCompleted: true,
     profileLocked: true,
     profileStatus: PROFILE_STATUS.LOCKED,
     lastProfileUpdatedAt: new Date(),
   });
+
+  console.log("Updated Profile:", updatedProfile);
+
+  return {
+    success: true,
+    message: "Mentor mapped successfully.",
+    data: updatedProfile,
+  };
 
   console.log("updatedProfile =", updatedProfile);
 

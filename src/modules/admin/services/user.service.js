@@ -8,17 +8,15 @@ const userRepository = require("../repositories/user.repository");
 
 class UserService {
   // ============================================================================
-// Get All Users
-// ============================================================================
+  // Get All Users
+  // ============================================================================
   async getAllUsers() {
-    return userRepository.getAllUsers({
-      isDeleted: false,
-    });
+    return userRepository.getAllUsers();
   }
 
   // ============================================================================
-// Get User By ID
-// ============================================================================
+  // Get User By ID
+  // ============================================================================
   async getUserById(userId) {
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       throw new Error("Invalid user id.");
@@ -34,8 +32,8 @@ class UserService {
   }
 
   // ============================================================================
-// Activate User
-// ============================================================================
+  // Activate User
+  // ============================================================================
   async activateUser(userId) {
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       throw new Error("Invalid user id.");
@@ -51,8 +49,8 @@ class UserService {
   }
 
   // ============================================================================
-// Deactivate User
-// ============================================================================
+  // Deactivate User
+  // ============================================================================
   async deactivateUser(userId) {
     if (!mongoose.Types.ObjectId.isValid(userId)) {
       throw new Error("Invalid user id.");
@@ -68,8 +66,8 @@ class UserService {
   }
 
   // ============================================================================
-// Count Users
-// ============================================================================
+  // Count Users
+  // ============================================================================
   async countUsers(filters = {}) {
     return userRepository.countUsers(filters);
   }

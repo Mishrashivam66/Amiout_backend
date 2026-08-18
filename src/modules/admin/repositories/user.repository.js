@@ -1,16 +1,13 @@
 "use strict";
-const StudentMaster = require("../../academic/models/StudentMaster");
+const User = require("../../auth/models/User");
 
 class UserRepository {
   // ============================================================================
   // Get All Users
   // ============================================================================
   async getAllUsers(filters = {}) {
-    const users = await StudentMaster.find(filters)
-      .populate("institute", "name")
-      .populate("program", "name code")
-      .populate("primaryMentor", "name")
-      .sort({ createdAt: -1 });
+    const totalUsers = await User.countDocuments({});
+    const users = await User.find(filters);
     return users;
   }
 
@@ -18,7 +15,7 @@ class UserRepository {
   // Get User By ID
   // ============================================================================
   async getUserById(userId) {
-    return StudentMaster.findById(userId)
+    return User.findById(userId)
       .populate("institute", "name")
       .populate("program", "name code")
       .populate("primaryMentor", "name");
@@ -28,7 +25,7 @@ class UserRepository {
   // Activate User
   // ============================================================================
   async activateUser(userId) {
-    return StudentMaster.findByIdAndUpdate(
+    return User.findByIdAndUpdate(
       userId,
       {
         isActive: true,
@@ -43,7 +40,7 @@ class UserRepository {
   // Deactivate User
   // ============================================================================
   async deactivateUser(userId) {
-    return StudentMaster.findByIdAndUpdate(
+    return User.findByIdAndUpdate(
       userId,
       {
         isActive: false,
@@ -58,7 +55,7 @@ class UserRepository {
   // Count Users
   // ============================================================================
   async countUsers(filters = {}) {
-    return StudentMaster.countDocuments(filters);
+    return User.countDocuments(filters);
   }
 }
 

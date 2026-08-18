@@ -6,6 +6,14 @@ const {
   mentorLogin,
   getMentorProfile,
   updateMentorProfile,
+
+  mentorForgotPassword,
+  mentorVerifyResetOtp,
+  mentorResendResetOtp,
+  mentorResetPassword,
+  mentorChangePassword,
+  mentorRefreshToken,
+  mentorLogout,
 } = require("../controllers/mentorRegister.controller");
 
 const {
@@ -27,5 +35,34 @@ router.put("/profile", protect, updateMentorProfile);
 // Login
 router.post("/login", mentorLogin);
 router.post("/resend-otp", mentorResendOtp);
+// ==========================================
+// FORGOT PASSWORD
+// ==========================================
+
+router.post("/forgot-password", mentorForgotPassword);
+
+router.post("/verify-reset-otp", mentorVerifyResetOtp);
+
+router.post("/resend-reset-otp", mentorResendResetOtp);
+
+router.post("/reset-password", mentorResetPassword);
+
+// ==========================================
+// CHANGE PASSWORD
+// ==========================================
+
+router.post("/change-password", protect, mentorChangePassword);
+
+// ==========================================
+// REFRESH TOKEN
+// ==========================================
+
+router.post("/refresh-token", mentorRefreshToken);
+
+// ==========================================
+// LOGOUT
+// ==========================================
+
+router.post("/logout", mentorLogout);
 
 module.exports = router;

@@ -38,7 +38,12 @@ const mentorResendOtpService = async (
 
   await sendEmail({
     to: mentor.email,
-    subject: "Verify Your Email",
+
+    subject:
+      purpose === "PASSWORD_RESET"
+        ? "AMIOUT Mentor Password Reset OTP"
+        : "Verify Your Email",
+
     html: generateOtpTemplate({
       name: mentor.name,
       otp,

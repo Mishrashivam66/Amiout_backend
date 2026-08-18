@@ -1,6 +1,14 @@
 "use strict";
 const mentorRegisterService = require("../services/mentorRegister.service");
 const mentorLoginService = require("../services/mentorLogin.service");
+const mentorForgotPasswordService = require("../services/mentorForgotPassword.service");
+const mentorVerifyResetOtpService = require("../services/mentorVerifyResetOtp.service");
+const mentorResendResetOtpService = require("../services/mentorResendResetOtp.service");
+const mentorResetPasswordService = require("../services/mentorResetPassword.service");
+const mentorChangePasswordService = require("../services/mentorChangePassword.service");
+const mentorRefreshTokenService = require("../services/mentorRefreshToken.service");
+const logoutService = require("../services/logout.service");
+
 const {
   getMentorProfileService,
   updateMentorProfileService,
@@ -18,10 +26,6 @@ const mentorRegister = async (req, res, next) => {
     next(error);
   }
 };
-
-// ==========================================
-// MENTOR LOGIN
-// ==========================================
 
 // ==========================================
 // MENTOR LOGIN
@@ -74,9 +78,101 @@ const updateMentorProfile = async (req, res, next) => {
     next(error);
   }
 };
+
+const mentorForgotPassword = async (req, res, next) => {
+  try {
+    const result = await mentorForgotPasswordService(req.body.email);
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const mentorVerifyResetOtp = async (req, res, next) => {
+  try {
+    const result = await mentorVerifyResetOtpService(
+      req.body.email,
+      req.body.otp,
+    );
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const mentorResendResetOtp = async (req, res, next) => {
+  try {
+    const result = await mentorResendResetOtpService(req.body.email);
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const mentorResetPassword = async (req, res, next) => {
+  try {
+    const result = await mentorResetPasswordService(
+      req.body.email,
+      req.body.password,
+    );
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+const mentorChangePassword = async (req, res, next) => {
+  try {
+    const result = await mentorChangePasswordService(
+      req.user._id,
+      req.body.oldPassword,
+      req.body.newPassword,
+    );
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const mentorRefreshToken = async (req, res, next) => {
+  try {
+    const token = req.cookies.refreshToken;
+
+    const result = await mentorRefreshTokenService(token);
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const mentorLogout = async (req, res, next) => {
+  try {
+    const token = req.cookies.refreshToken;
+
+    const result = await logoutService(token);
+
+    res.clearCookie("refreshToken");
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
 module.exports = Object.freeze({
   mentorRegister,
   mentorLogin,
   getMentorProfile,
   updateMentorProfile,
+  mentorForgotPassword,
+  mentorVerifyResetOtp,
+  mentorResendResetOtp,
+  mentorResetPassword,
+  mentorChangePassword,
+  mentorRefreshToken,
+  mentorLogout,
 });

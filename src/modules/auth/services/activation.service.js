@@ -12,6 +12,7 @@ const {
   sendEmail,
   generateAccountActivationTemplate,
   generateTemporaryPasswordTemplate,
+  generateWelcomeTemplate,
 } = require("../utils/email");
 
 const { AUTH_CONSTANTS } = require("../constants");
@@ -341,6 +342,32 @@ const verifyActivationOtpService = async (email, otp) => {
   } finally {
     await ActivationOTP.deleteOne({ _id: record._id });
   }
+
+  // ==========================================
+  // SEND WELCOME EMAIL
+  // ==========================================
+
+  try {
+    await sendEmail({
+      to: normalizedEmail,
+      subject: "Welcome to AMIOUT!",
+      html: generateWelcomeTemplate({
+        name: updatedAccount.name || "User",
+        role: updatedAccount.role || accountType,
+      }),
+    });
+
+    console.log("Welcome email sent successfully.");
+  } catch (error) {
+    console.error("Welcome email failed:", error.message);
+
+    // Welcome email failure should not
+    // affect successful account activation.
+  }
+
+  // ==========================================
+  // SUCCESS RESPONSE
+  // ==========================================
 
   return {
     success: true,

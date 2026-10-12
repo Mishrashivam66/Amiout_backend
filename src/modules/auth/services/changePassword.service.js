@@ -1,5 +1,7 @@
 "use strict";
 
+const bcrypt = require("bcrypt");
+
 const { revokeAllUserTokens } = require("../repositories/auth.repository");
 
 const {
@@ -72,7 +74,7 @@ const changePasswordService = async (
   validateNewPassword(newPassword);
 
   // ========================================
-  // FIND ACCOUNT WITH PASSWORD
+  // FIND ACCOUNT
   // ========================================
 
   const account = await AccountModel.findById(userId).select("+password");
@@ -106,30 +108,42 @@ const changePasswordService = async (
   }
 
   // ========================================
-  // UPDATE PASSWORD
+  // HASH NEW PASSWORD
   // ========================================
 
-  // The account model's pre-save hook
-  // must hash the password.
+  // findOneAndUpdate does not run the
+  // Mongoose pre-save password hashing hook.
+  // Therefore hash the password explicitly.
 
-  account.password = newPassword;
-
-  account.passwordChangedAt = new Date();
-
-  // ========================================
-  // COMPLETE FIRST-LOGIN SETUP
-  // ========================================
-
-  // Clear the mandatory password change
-  // requirement after successful update.
-
-  account.mustChangePassword = false;
+  const hashedPassword = await bcrypt.hash(newPassword, 10);
 
   // ========================================
-  // SAVE ACCOUNT
+  // UPDATE ONLY PASSWORD FIELDS
   // ========================================
 
-  await account.save();
+  const updatedAccount = await AccountModel.findOneAndUpdate(
+    {
+      _id: account._id,
+      password: account.password,
+    },
+    {
+      $set: {
+        password: hashedPassword,
+        passwordChangedAt: new Date(),
+        mustChangePassword: false,
+      },
+    },
+    {
+      new: true,
+      runValidators: false,
+    },
+  );
+
+  if (!updatedAccount) {
+    throw new Error(
+      "Password was changed by another request. Please login again.",
+    );
+  }
 
   // ========================================
   // REVOKE ALL REFRESH SESSIONS

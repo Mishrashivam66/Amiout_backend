@@ -1,45 +1,52 @@
+"use strict";
 
-// ============================================================================
+// ============================================================
+// Helpers
+// ============================================================
+
+const hasValue = (value) =>
+  value !== undefined && value !== null && String(value).trim() !== "";
+
+// ============================================================
 // Validate Required Fields
-// ============================================================================
+// ============================================================
+
 const validateRequiredFields = (student = {}) => {
   const errors = [];
 
-  if (!student.name) {
-    errors.push("Student Name is required.");
-  }
+  const requiredFields = [
+    ["name", "Student Name"],
+    ["enrollmentNumber", "Enrollment Number"],
+    ["rollNumber", "Roll Number"],
+    ["email", "Student Email"],
+    ["institute", "Institute"],
+    ["program", "Program"],
+    ["degree", "Course"],
+    ["batch", "Batch"],
+    ["semester", "Semester"],
+    ["section", "Section"],
 
-  if (!student.enrollmentNumber) {
-    errors.push("Enrollment Number is required.");
-  }
+    // Parent / Guardian Information
+    ["parentName", "Parent Name"],
+    ["parentMobileNumber", "Parent Mobile Number"],
+  ];
 
-  if (!student.rollNumber) {
-    errors.push("Roll Number is required.");
-  }
-
-  if (!student.program) {
-    errors.push("Program is required.");
-  }
-
-  if (!student.batch) {
-    errors.push("Batch is required.");
-  }
-
-  if (!student.semester) {
-    errors.push("Semester is required.");
-  }
-
-  if (!student.section) {
-    errors.push("Section is required.");
+  for (const [field, label] of requiredFields) {
+    if (!hasValue(student[field])) {
+      errors.push(`${label} is required.`);
+    }
   }
 
   return errors;
 };
 
-// ============================================================================
+// ============================================================
 // Validate Enrollment Number
-// ============================================================================
-const validateEnrollmentNumber = (enrollmentNumber = "") => {
+// ============================================================
+
+const validateEnrollmentNumber = (enrollmentNumber) => {
+  if (!hasValue(enrollmentNumber)) return null;
+
   const value = String(enrollmentNumber).trim().toUpperCase();
 
   if (value.length < 8) {
@@ -49,14 +56,17 @@ const validateEnrollmentNumber = (enrollmentNumber = "") => {
   return null;
 };
 
-// ============================================================================
+// ============================================================
 // Validate Semester
-// ============================================================================
+// ============================================================
+
 const validateSemester = (semester) => {
+  if (!hasValue(semester)) return null;
+
   const number = Number(semester);
 
-  if (Number.isNaN(number)) {
-    return "Semester must be a number.";
+  if (!Number.isInteger(number)) {
+    return "Semester must be a whole number.";
   }
 
   if (number < 1 || number > 12) {
@@ -66,61 +76,118 @@ const validateSemester = (semester) => {
   return null;
 };
 
-// ============================================================================
-// Validate Section
-// ============================================================================
-const validateSection = (section = "") => {
-  const value = String(section).trim().toUpperCase();
+// ============================================================
+// Validate Student Email
+// ============================================================
 
-  if (!value) {
-    return "Section is required.";
+const validateEmail = (email) => {
+  if (!hasValue(email)) return null;
+
+  const value = String(email).trim();
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+    return "Invalid Student Email.";
   }
 
   return null;
 };
 
-// ============================================================================
-// Validate Batch
-// ============================================================================
-const validateBatch = (batch = "") => {
-  if (!String(batch).trim()) {
-    return "Batch is required.";
+// ============================================================
+// Validate Parent Name
+// ============================================================
+
+const validateParentName = (parentName) => {
+  if (!hasValue(parentName)) return null;
+
+  const value = String(parentName).trim();
+
+  if (value.length < 2 || value.length > 150) {
+    return "Parent Name must contain 2 to 150 characters.";
   }
 
   return null;
 };
 
-// ============================================================================
-// Validate Student Record
-// ============================================================================
-const validateStudent = (student = {}) => {
+// ============================================================
+// Validate Parent Mobile Number
+// ============================================================
+
+const validateParentMobileNumber = (number) => {
+  if (!hasValue(number)) return null;
+
+  const value = String(number).trim();
+
+  if (!/^[0-9]{10}$/.test(value)) {
+    return "Parent Mobile Number must contain exactly 10 digits.";
+  }
+
+  return null;
+};
+
+// ============================================================
+// Validate Academic Years
+// ============================================================
+
+const validateAcademicYears = (student = {}) => {
   const errors = [];
 
-  errors.push(...validateRequiredFields(student));
+  const hasAdmission = hasValue(student.admissionYear);
+  const hasPassing = hasValue(student.passingYear);
 
-  const enrollmentError = validateEnrollmentNumber(student.enrollmentNumber);
+  if (hasAdmission) {
+    const year = Number(student.admissionYear);
 
-  if (enrollmentError) {
-    errors.push(enrollmentError);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+      errors.push("Invalid Admission Year.");
+    }
   }
 
-  const semesterError = validateSemester(student.semester);
+  if (hasPassing) {
+    const year = Number(student.passingYear);
 
-  if (semesterError) {
-    errors.push(semesterError);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+      errors.push("Invalid Passing Year.");
+    }
   }
 
-  const batchError = validateBatch(student.batch);
+  if (hasAdmission && hasPassing) {
+    const admission = Number(student.admissionYear);
+    const passing = Number(student.passingYear);
 
-  if (batchError) {
-    errors.push(batchError);
+    if (
+      Number.isInteger(admission) &&
+      Number.isInteger(passing) &&
+      passing <= admission
+    ) {
+      errors.push("Passing Year must be greater than Admission Year.");
+    }
   }
 
-  const sectionError = validateSection(student.section);
+  return errors;
+};
 
-  if (sectionError) {
-    errors.push(sectionError);
+// ============================================================
+// Validate Single Student
+// ============================================================
+
+const validateStudent = (student = {}) => {
+  const errors = validateRequiredFields(student);
+
+  const checks = [
+    validateEnrollmentNumber(student.enrollmentNumber),
+    validateSemester(student.semester),
+    validateEmail(student.email),
+    validateParentName(student.parentName),
+    validateParentMobileNumber(student.parentMobileNumber),
+  ];
+
+  for (const error of checks) {
+    if (error) {
+      errors.push(error);
+    }
   }
+
+  errors.push(...validateAcademicYears(student));
 
   return {
     isValid: errors.length === 0,
@@ -128,10 +195,15 @@ const validateStudent = (student = {}) => {
   };
 };
 
-// ============================================================================
+// ============================================================
 // Validate Multiple Students
-// ============================================================================
+// ============================================================
+
 const validateStudents = (students = []) => {
+  if (!Array.isArray(students)) {
+    throw new Error("Students must be an array.");
+  }
+
   const validStudents = [];
   const invalidStudents = [];
 
@@ -154,6 +226,10 @@ const validateStudents = (students = []) => {
     invalidStudents,
   };
 };
+
+// ============================================================
+// Exports
+// ============================================================
 
 module.exports = Object.freeze({
   validateStudent,

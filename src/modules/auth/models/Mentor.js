@@ -96,7 +96,7 @@ const mentorSchema = new mongoose.Schema(
       required: true,
       trim: true,
       minlength: 3,
-      maxlength: 100,
+      maxlength: 150,
     },
 
     email: {
@@ -105,6 +105,7 @@ const mentorSchema = new mongoose.Schema(
       unique: true,
       lowercase: true,
       trim: true,
+      index: true,
     },
 
     employeeId: {
@@ -113,6 +114,14 @@ const mentorSchema = new mongoose.Schema(
       unique: true,
       uppercase: true,
       trim: true,
+      index: true,
+    },
+
+    designation: {
+      type: String,
+      trim: true,
+      maxlength: 150,
+      default: "",
     },
 
     profilePhoto: {
@@ -143,6 +152,7 @@ const mentorSchema = new mongoose.Schema(
       select: false,
     },
 
+    // Backward compatibility
     role: {
       type: String,
       enum: FACULTY_ROLES,
@@ -150,6 +160,7 @@ const mentorSchema = new mongoose.Schema(
       uppercase: true,
     },
 
+    // Multiple faculty roles
     roles: {
       type: [
         {
@@ -161,6 +172,7 @@ const mentorSchema = new mongoose.Schema(
       default: ["MENTOR"],
     },
 
+    // Academic access assignments
     roleAssignments: {
       type: [roleAssignmentSchema],
       default: [],
@@ -180,15 +192,7 @@ const mentorSchema = new mongoose.Schema(
       default: true,
     },
 
-    // ======================================
-    // FIRST LOGIN PASSWORD CHANGE
-    // ======================================
-
-    mustChangePassword: {
-      type: Boolean,
-      default: false,
-    },
-
+    // Website-controlled availability
     availabilityStatus: {
       type: String,
       enum: ["AVAILABLE", "UNAVAILABLE"],
@@ -198,6 +202,15 @@ const mentorSchema = new mongoose.Schema(
     availabilityUpdatedAt: {
       type: Date,
       default: Date.now,
+    },
+
+    // ======================================
+    // FIRST LOGIN PASSWORD CHANGE
+    // ======================================
+
+    mustChangePassword: {
+      type: Boolean,
+      default: false,
     },
 
     lastLogin: {
@@ -238,11 +251,12 @@ const mentorSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    versionKey: false,
   },
 );
 
 // ==========================================
-// VALIDATE ROLE ASSIGNMENTS
+// VALIDATE FACULTY ROLES AND ASSIGNMENTS
 // ==========================================
 
 mentorSchema.pre("validate", function () {
@@ -269,18 +283,36 @@ mentorSchema.pre("validate", function () {
 
   this.roles = normalizedRoles;
 
+  const assignmentKeys = new Set();
+
   for (const assignment of this.roleAssignments || []) {
     const role = normalizeRole(assignment.role);
-
     const scopeType = normalizeRole(assignment.scopeType);
+    const scopeId = String(assignment.scopeId || "").trim();
+
+    if (!FACULTY_ROLES.includes(role)) {
+      throw new Error(`Invalid faculty role: ${role}`);
+    }
 
     if (FACULTY_ROLE_SCOPES[role] !== scopeType) {
       throw new Error(`Invalid scope type for ${role}.`);
     }
 
-    if (!String(assignment.scopeId || "").trim()) {
+    if (!this.roles.includes(role)) {
+      throw new Error(`Role assignment ${role} is missing from faculty roles.`);
+    }
+
+    if (!scopeId) {
       throw new Error("Role assignment scope ID is required.");
     }
+
+    const assignmentKey = `${role}:${scopeType}:${scopeId}`;
+
+    if (assignmentKeys.has(assignmentKey)) {
+      throw new Error(`Duplicate role assignment: ${assignmentKey}`);
+    }
+
+    assignmentKeys.add(assignmentKey);
 
     if (
       assignment.expiresAt &&
@@ -297,15 +329,23 @@ mentorSchema.pre("validate", function () {
 // ==========================================
 
 mentorSchema.methods.getActiveRoleAssignments = function (now = new Date()) {
+  if (this.isActive !== true) {
+    return [];
+  }
+
   return (this.roleAssignments || []).filter((assignment) => {
     if (assignment.isActive !== true) {
       return false;
     }
 
-    if (
-      FACULTY_ROLE_SCOPES[normalizeRole(assignment.role)] !==
-      normalizeRole(assignment.scopeType)
-    ) {
+    const role = normalizeRole(assignment.role);
+    const scopeType = normalizeRole(assignment.scopeType);
+
+    if (!this.roles.includes(role)) {
+      return false;
+    }
+
+    if (FACULTY_ROLE_SCOPES[role] !== scopeType) {
       return false;
     }
 
@@ -332,6 +372,29 @@ mentorSchema.methods.getActiveRoleAssignments = function (now = new Date()) {
 
     return true;
   });
+};
+
+// ==========================================
+// CHECK FACULTY ROLE
+// ==========================================
+
+mentorSchema.methods.hasRole = function (role) {
+  return this.roles.includes(normalizeRole(role));
+};
+
+// ==========================================
+// CHECK ACTIVE SCOPE ACCESS
+// ==========================================
+
+mentorSchema.methods.hasScopeAccess = function (role, scopeId) {
+  const normalizedRole = normalizeRole(role);
+  const normalizedScopeId = String(scopeId || "").trim();
+
+  return this.getActiveRoleAssignments().some(
+    (assignment) =>
+      assignment.role === normalizedRole &&
+      assignment.scopeId === normalizedScopeId,
+  );
 };
 
 // ==========================================
@@ -382,12 +445,35 @@ mentorSchema.methods.generatePasswordResetToken = function () {
 };
 
 // ==========================================
+// SECURE JSON TRANSFORM
+// ==========================================
+
+mentorSchema.set("toJSON", {
+  transform(doc, ret) {
+    delete ret.password;
+    delete ret.refreshToken;
+    delete ret.resetPasswordToken;
+    delete ret.resetPasswordExpires;
+    return ret;
+  },
+});
+
+// ==========================================
 // INDEXES
 // ==========================================
 
 mentorSchema.index({
   "roleAssignments.role": 1,
   "roleAssignments.scopeId": 1,
+});
+
+mentorSchema.index({
+  department: 1,
+  isActive: 1,
+});
+
+mentorSchema.index({
+  availabilityStatus: 1,
 });
 
 // ==========================================

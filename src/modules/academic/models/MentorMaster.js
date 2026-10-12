@@ -1,10 +1,22 @@
+"use strict";
+
 const mongoose = require("mongoose");
+
+const VALID_ROLES = ["MENTOR", "COORDINATOR", "HOD", "HOI"];
 
 const mentorMasterSchema = new mongoose.Schema(
   {
-    // ============================================================================
-    // Mentor Name
-    // ============================================================================
+    // ==========================================
+    // FACULTY BASIC INFORMATION
+    // ==========================================
+
+    facultyId: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: null,
+    },
+
     name: {
       type: String,
       required: true,
@@ -12,9 +24,49 @@ const mentorMasterSchema = new mongoose.Schema(
       maxlength: 150,
     },
 
-    // ============================================================================
-    // Course Name
-    // ============================================================================
+    designation: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    roles: {
+      type: [
+        {
+          type: String,
+          enum: VALID_ROLES,
+          uppercase: true,
+          trim: true,
+        },
+      ],
+      default: ["MENTOR"],
+    },
+
+    // ==========================================
+    // ACADEMIC INFORMATION
+    // ==========================================
+
+    institute: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: "",
+    },
+
+    department: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: "",
+    },
+
+    program: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: "",
+    },
+
     course: {
       type: String,
       required: true,
@@ -22,30 +74,20 @@ const mentorMasterSchema = new mongoose.Schema(
       uppercase: true,
     },
 
-    // ============================================================================
-    // Semester
-    // ============================================================================
     semester: {
       type: Number,
       required: true,
       min: 1,
+      max: 12,
     },
+
     section: {
       type: String,
-
       trim: true,
       uppercase: true,
-    },
-    mentorEmail: {
-      type: String,
-      trim: true,
-      lowercase: true,
       default: "",
-      index: true,
     },
-    // ============================================================================
-    // Group
-    // ============================================================================
+
     group: {
       type: String,
       required: true,
@@ -53,20 +95,52 @@ const mentorMasterSchema = new mongoose.Schema(
       uppercase: true,
     },
 
-    // ============================================================================
-    // Coordinator Name
-    // ============================================================================
+    // ==========================================
+    // FACULTY EMAIL
+    // ==========================================
+
+    mentorEmail: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: "",
+      index: true,
+    },
+
+    // ==========================================
+    // COORDINATOR INFORMATION
+    // ==========================================
+
+    coordinatorGroups: {
+      type: [
+        {
+          type: String,
+          trim: true,
+          uppercase: true,
+        },
+      ],
+      default: [],
+    },
+
     coordinator: {
       type: String,
-      default: "",
       trim: true,
+      default: "",
     },
+
+    // ==========================================
+    // STUDENT INFORMATION
+    // ==========================================
 
     totalStudents: {
       type: Number,
       default: 0,
       min: 0,
     },
+
+    // ==========================================
+    // FACULTY LOGIN ACCOUNT LINK
+    // ==========================================
 
     mentorUser: {
       type: mongoose.Schema.Types.ObjectId,
@@ -75,15 +149,16 @@ const mentorMasterSchema = new mongoose.Schema(
       index: true,
     },
 
+    // ==========================================
+    // RECORD STATUS
+    // ==========================================
+
     isActive: {
       type: Boolean,
       default: true,
       index: true,
     },
 
-    // ============================================================================
-    // Soft Delete
-    // ============================================================================
     isDeleted: {
       type: Boolean,
       default: false,
@@ -96,10 +171,28 @@ const mentorMasterSchema = new mongoose.Schema(
   },
 );
 
-// ============================================================================
-// Indexes
-// ============================================================================
+// ==========================================
+// INDEXES
+// ==========================================
 
+// Faculty ID is NOT unique here.
+// One faculty can have multiple group assignments.
+mentorMasterSchema.index({
+  facultyId: 1,
+  isDeleted: 1,
+});
+
+// Academic group lookup
+mentorMasterSchema.index({
+  institute: 1,
+  program: 1,
+  semester: 1,
+  section: 1,
+  group: 1,
+  isDeleted: 1,
+});
+
+// Legacy course lookup
 mentorMasterSchema.index({
   course: 1,
   semester: 1,
@@ -107,21 +200,27 @@ mentorMasterSchema.index({
   group: 1,
 });
 
+// Faculty name lookup
 mentorMasterSchema.index({
   name: 1,
 });
 
-// ============================================================================
-// JSON Transform
-// ============================================================================
+// ==========================================
+// JSON TRANSFORM
+// ==========================================
 
 mentorMasterSchema.set("toJSON", {
   virtuals: true,
+
   transform(doc, ret) {
     delete ret.__v;
     delete ret.isDeleted;
     return ret;
   },
 });
+
+// ==========================================
+// EXPORT MODEL
+// ==========================================
 
 module.exports = mongoose.model("MentorMaster", mentorMasterSchema);

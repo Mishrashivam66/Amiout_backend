@@ -3,34 +3,50 @@
 const asyncHandler = require("express-async-handler");
 
 const studentImportService = require("../../academic/services/studentImport.service");
+
 const mentorImportService = require("../../academic/services/mentorImport.service");
+
 const groupService = require("../../academic/services/group.service");
+
 const importEngineService = require("../services/import.service");
 
 const pdfImportService = require("../services/pdfImport.service");
+
 const { mapMentorRows } = require("../../academic/utils/mentorExcelMapper");
-// ============================================================================
+
+// ============================================================
 // Import Students
-// ============================================================================
-// ============================================================================
-// Import Students
-// ============================================================================
+// ============================================================
 
 const importStudents = asyncHandler(async (req, res) => {
-  // ============================================================================
-  // Parse + Validate Excel
-  // ============================================================================
+  // ----------------------------------------------------------
+  // Validate Uploaded File
+  // ----------------------------------------------------------
+
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      message: "Please upload a student Excel file.",
+    });
+  }
+
+  // ----------------------------------------------------------
+  // Parse And Validate Excel
+  // ----------------------------------------------------------
 
   const importResult = await importEngineService.processImport({
     file: req.file,
 
     importType: "STUDENT",
 
+    // Matches AMIOUT Student Bulk Upload Template.
+    // Batch is generated later by studentExcelMapper.js.
     requiredColumns: [
       "enrollment number",
       "roll number",
       "student name",
-      "batch",
+      "admission year",
+      "passing year",
       "semester",
       "section",
     ],
@@ -44,22 +60,67 @@ const importStudents = asyncHandler(async (req, res) => {
     userAgent: req.get("user-agent"),
   });
 
-  // ============================================================================
-  // Save Students
-  // ============================================================================
+  // ----------------------------------------------------------
+  // Debug Validation Results
+  // ----------------------------------------------------------
+
+  console.log("================================");
+  console.log("STUDENT IMPORT VALIDATION");
+  console.log(importResult.summary);
+
+  console.log("VALID RECORDS:");
+  console.log(importResult.validRecords?.length || 0);
+
+  console.log("VALIDATION ERRORS:");
+  console.log(importResult.validationErrors?.slice(0, 10));
+
+  // ----------------------------------------------------------
+  // Handle Empty / Invalid Excel Records
+  // ----------------------------------------------------------
+
+  if (
+    !Array.isArray(importResult.validRecords) ||
+    importResult.validRecords.length === 0
+  ) {
+    return res.status(422).json({
+      success: false,
+
+      message:
+        "No valid student records found. Please check the Excel template.",
+
+      data: {
+        summary: importResult.summary,
+
+        validationErrors: importResult.validationErrors,
+
+        duplicates: importResult.duplicates,
+
+        historyId: importResult.historyId,
+      },
+    });
+  }
+
+  // ----------------------------------------------------------
+  // Save Students To Student Master
+  // ----------------------------------------------------------
 
   const studentResult = await studentImportService.importStudents(
     importResult.validRecords,
   );
+  console.log("========== FINAL STUDENT IMPORT RESULT ==========");
 
-  // ============================================================================
-  // Response
-  // ============================================================================
+  console.log(JSON.stringify(studentResult, null, 2));
+  // ----------------------------------------------------------
+  // Return Import Results
+  // ----------------------------------------------------------
 
   return res.status(201).json({
     success: true,
 
-    message: "Students imported successfully.",
+    message:
+      studentResult.imported > 0
+        ? "Student import completed successfully."
+        : "Student import completed. No new students were inserted.",
 
     data: {
       summary: studentResult.summary,
@@ -84,19 +145,25 @@ const importStudents = asyncHandler(async (req, res) => {
     },
   });
 });
-// ============================================================================
+
+// ============================================================
 // Import Mentors
-// ============================================================================
+// ============================================================
 
 const importMentors = asyncHandler(async (req, res) => {
-  console.log("req.file =", req.file);
-  console.log("req.body =", req.body);
   try {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: "Please upload a mentor Excel file.",
+      });
+    }
+
     const importResult = await importEngineService.processImport({
       file: req.file,
+
       importType: "MENTOR",
 
-      // Amity Excel Columns
       requiredColumns: [
         "course name",
         "semester",
@@ -104,15 +171,31 @@ const importMentors = asyncHandler(async (req, res) => {
         "name of mentor",
       ],
 
-      // Employee ID Excel me nahi hai
       uniqueField: "",
 
       importedBy: req.user._id,
+
       ipAddress: req.ip,
+
       userAgent: req.get("user-agent"),
     });
 
-    // Excel -> Internal Format
+    if (
+      !Array.isArray(importResult.validRecords) ||
+      importResult.validRecords.length === 0
+    ) {
+      return res.status(422).json({
+        success: false,
+        message: "No valid mentor records found in Excel.",
+        data: {
+          summary: importResult.summary,
+          validationErrors: importResult.validationErrors,
+          historyId: importResult.historyId,
+        },
+      });
+    }
+
+    // Convert Excel fields into Mentor Master fields.
     const mappedRows = mapMentorRows(importResult.validRecords);
 
     const mentorResult = await mentorImportService.importMentors(mappedRows);
@@ -122,17 +205,28 @@ const importMentors = asyncHandler(async (req, res) => {
       message: "Mentors imported successfully.",
       data: mentorResult,
     });
-  } catch (err) {
+  } catch (error) {
+    console.error("Mentor Import Error:", error);
+
     return res.status(500).json({
       success: false,
-      message: err.message,
+      message: error.message,
     });
   }
 });
-// ============================================================================
+
+// ============================================================
 // Import Groups
-// ============================================================================
+// ============================================================
+
 const importGroups = asyncHandler(async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      message: "Please upload a group Excel file.",
+    });
+  }
+
   const importResult = await importEngineService.processImport({
     file: req.file,
 
@@ -149,6 +243,21 @@ const importGroups = asyncHandler(async (req, res) => {
     userAgent: req.get("user-agent"),
   });
 
+  if (
+    !Array.isArray(importResult.validRecords) ||
+    importResult.validRecords.length === 0
+  ) {
+    return res.status(422).json({
+      success: false,
+      message: "No valid group records found in Excel.",
+      data: {
+        summary: importResult.summary,
+        validationErrors: importResult.validationErrors,
+        historyId: importResult.historyId,
+      },
+    });
+  }
+
   const result = await groupService.importGroups(importResult.validRecords);
 
   return res.status(201).json({
@@ -158,9 +267,10 @@ const importGroups = asyncHandler(async (req, res) => {
   });
 });
 
-// ============================================================================
+// ============================================================
 // Download Student Template
-// ============================================================================
+// ============================================================
+
 const downloadStudentTemplate = asyncHandler(async (req, res) => {
   return res.status(200).json({
     success: true,
@@ -168,9 +278,10 @@ const downloadStudentTemplate = asyncHandler(async (req, res) => {
   });
 });
 
-// ============================================================================
+// ============================================================
 // Download Mentor Template
-// ============================================================================
+// ============================================================
+
 const downloadMentorTemplate = asyncHandler(async (req, res) => {
   return res.status(200).json({
     success: true,
@@ -178,9 +289,10 @@ const downloadMentorTemplate = asyncHandler(async (req, res) => {
   });
 });
 
-// ============================================================================
+// ============================================================
 // Download Group Template
-// ============================================================================
+// ============================================================
+
 const downloadGroupTemplate = asyncHandler(async (req, res) => {
   return res.status(200).json({
     success: true,
@@ -188,9 +300,9 @@ const downloadGroupTemplate = asyncHandler(async (req, res) => {
   });
 });
 
-// ============================================================================
+// ============================================================
 // Get Import History
-// ============================================================================
+// ============================================================
 
 const getImportHistory = asyncHandler(async (req, res) => {
   const history = await importEngineService.getImportHistory();
@@ -202,9 +314,9 @@ const getImportHistory = asyncHandler(async (req, res) => {
   });
 });
 
-// ============================================================================
+// ============================================================
 // Get Import History By ID
-// ============================================================================
+// ============================================================
 
 const getImportHistoryById = asyncHandler(async (req, res) => {
   const history = await importEngineService.getImportHistoryById(req.params.id);
@@ -223,11 +335,18 @@ const getImportHistoryById = asyncHandler(async (req, res) => {
   });
 });
 
-// ============================================================================
+// ============================================================
 // Import Students From PDF
-// ============================================================================
+// ============================================================
 
 const importStudentsFromPDF = asyncHandler(async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      message: "Please upload a student PDF file.",
+    });
+  }
+
   try {
     const result = await pdfImportService.importStudentsFromPDF(req.file);
 
@@ -245,11 +364,15 @@ const importStudentsFromPDF = asyncHandler(async (req, res) => {
     });
   }
 });
+
+// ============================================================
+// Export Controllers
+// ============================================================
+
 module.exports = Object.freeze({
   importStudents,
   importMentors,
   importGroups,
-
   importStudentsFromPDF,
   getImportHistory,
   getImportHistoryById,

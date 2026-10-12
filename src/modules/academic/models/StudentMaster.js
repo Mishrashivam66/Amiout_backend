@@ -1,10 +1,13 @@
+"use strict";
+
 const mongoose = require("mongoose");
 
 const studentMasterSchema = new mongoose.Schema(
   {
-    // ============================================================================
-    // Student Name
-    // ============================================================================
+    // ============================================================
+    // Student Identity
+    // ============================================================
+
     name: {
       type: String,
       required: true,
@@ -12,9 +15,6 @@ const studentMasterSchema = new mongoose.Schema(
       maxlength: 150,
     },
 
-    // ============================================================================
-    // Enrollment Number
-    // ============================================================================
     enrollmentNumber: {
       type: String,
       required: true,
@@ -23,18 +23,62 @@ const studentMasterSchema = new mongoose.Schema(
       uppercase: true,
     },
 
-    // ============================================================================
-    // Roll Number
-    // ============================================================================
     rollNumber: {
       type: String,
       required: true,
       trim: true,
     },
 
-    // ============================================================================
-    // Institute
-    // ============================================================================
+    // ============================================================
+    // Official Contact Information
+    // ============================================================
+
+    email: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: undefined,
+      validate: {
+        validator: function (value) {
+          return !value || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+        },
+        message: "Invalid student email address.",
+      },
+    },
+
+    mobileNumber: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+
+    // ============================================================
+    // Parent / Guardian Information
+    // ============================================================
+
+    parentName: {
+      type: String,
+      trim: true,
+      maxlength: 150,
+      default: "",
+    },
+
+    parentMobileNumber: {
+      type: String,
+      trim: true,
+      default: "",
+      validate: {
+        validator: function (value) {
+          return !value || /^[0-9]{10}$/.test(value);
+        },
+        message: "Parent mobile number must contain 10 digits.",
+      },
+    },
+
+    // ============================================================
+    // Academic References
+    // ============================================================
+
     institute: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Institute",
@@ -42,9 +86,6 @@ const studentMasterSchema = new mongoose.Schema(
       index: true,
     },
 
-    // ============================================================================
-    // Program
-    // ============================================================================
     program: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Program",
@@ -52,15 +93,30 @@ const studentMasterSchema = new mongoose.Schema(
       index: true,
     },
 
+    // ============================================================
+    // Academic Details
+    // ============================================================
+
     batch: {
       type: String,
       required: true,
       trim: true,
     },
 
-    // ============================================================================
-    // Current Semester
-    // ============================================================================
+    admissionYear: {
+      type: Number,
+      min: 2000,
+      max: 2100,
+      default: undefined,
+    },
+
+    passingYear: {
+      type: Number,
+      min: 2000,
+      max: 2100,
+      default: undefined,
+    },
+
     semester: {
       type: Number,
       required: true,
@@ -80,9 +136,11 @@ const studentMasterSchema = new mongoose.Schema(
       uppercase: true,
       default: null,
     },
-    // ============================================================================
-    // Academic Group Reference
-    // ============================================================================
+
+    // ============================================================
+    // Mentor Mapping
+    // ============================================================
+
     mentorGroup: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Group",
@@ -90,9 +148,6 @@ const studentMasterSchema = new mongoose.Schema(
       index: true,
     },
 
-    // ============================================================================
-    // Primary Mentor
-    // ============================================================================
     primaryMentor: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "MentorMaster",
@@ -100,9 +155,6 @@ const studentMasterSchema = new mongoose.Schema(
       index: true,
     },
 
-    // ============================================================================
-    // Backup Mentor
-    // ============================================================================
     backupMentor: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "MentorMaster",
@@ -110,27 +162,30 @@ const studentMasterSchema = new mongoose.Schema(
       index: true,
     },
 
-    // ============================================================================
+    // ============================================================
     // Registration Status
-    // ============================================================================
+    // ============================================================
+
     isRegistered: {
       type: Boolean,
       default: false,
       index: true,
     },
 
-    // ============================================================================
+    // ============================================================
     // Active Status
-    // ============================================================================
+    // ============================================================
+
     isActive: {
       type: Boolean,
       default: true,
       index: true,
     },
 
-    // ============================================================================
+    // ============================================================
     // Soft Delete
-    // ============================================================================
+    // ============================================================
+
     isDeleted: {
       type: Boolean,
       default: false,
@@ -143,9 +198,9 @@ const studentMasterSchema = new mongoose.Schema(
   },
 );
 
-// ============================================================================
+// ============================================================
 // Indexes
-// ============================================================================
+// ============================================================
 
 studentMasterSchema.index({
   institute: 1,
@@ -158,22 +213,32 @@ studentMasterSchema.index({
   group: 1,
 });
 
-// ============================================================================
+// Optional email, unique when supplied.
+studentMasterSchema.index(
+  { email: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      email: { $type: "string" },
+    },
+  },
+);
+
+// ============================================================
 // JSON Transform
-// ============================================================================
+// ============================================================
 
 studentMasterSchema.set("toJSON", {
   virtuals: true,
   transform(doc, ret) {
     delete ret.__v;
     delete ret.isDeleted;
-
     return ret;
   },
 });
 
-// ============================================================================
+// ============================================================
 // Export Model
-// ============================================================================
+// ============================================================
 
 module.exports = mongoose.model("StudentMaster", studentMasterSchema);

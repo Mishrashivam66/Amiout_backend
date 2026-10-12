@@ -1,4 +1,5 @@
 const express = require("express");
+const multer = require("multer");
 
 const router = express.Router();
 
@@ -10,48 +11,76 @@ const authorize = require("../../../middlewares/role.middleware");
 
 const ROLES = require("../../auth/constants/roles");
 
-// ============================================================================
-// Protected Routes
-// ============================================================================
+// ==========================================
+// MULTER CONFIGURATION
+// ==========================================
+
+const storage = multer.memoryStorage();
+
+const upload = multer({
+  storage,
+
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5 MB
+  },
+
+  fileFilter: (req, file, cb) => {
+    const isXlsx = file.originalname.toLowerCase().endsWith(".xlsx");
+
+    if (!isXlsx) {
+      return cb(new Error("Only .xlsx Excel files are allowed."));
+    }
+
+    cb(null, true);
+  },
+});
+
+// ==========================================
+// ADMIN PROTECTED ROUTES
+// ==========================================
 
 router.use(protect);
-
 router.use(authorize(ROLES.ADMIN));
 
-// ============================================================================
-// Mentor Import Routes
-// ============================================================================
+// ==========================================
+// IMPORT FACULTY EXCEL
+// ==========================================
 
-/**
- * Import Mentors
- */
-router.post("/import", mentorImportController.importMentors);
+router.post(
+  "/import",
+  upload.single("file"),
+  mentorImportController.importMentors,
+);
 
-/**
- * Get All Mentors
- */
+// ==========================================
+// GET ALL FACULTY / MENTORS
+// ==========================================
+
 router.get("/", mentorImportController.getAllMentors);
 
-/**
- * Get Mentor By Employee ID
- */
+// ==========================================
+// GET FACULTY BY EMPLOYEE ID
+// ==========================================
+
 router.get(
   "/employee/:employeeId",
   mentorImportController.getMentorByEmployeeId,
 );
 
-/**
- * Update Mentor
- */
+// ==========================================
+// UPDATE FACULTY
+// ==========================================
+
 router.put("/:id", mentorImportController.updateMentor);
 
-/**
- * Delete Mentor
- */
+// ==========================================
+// DELETE FACULTY
+// ==========================================
+
 router.delete("/:id", mentorImportController.deleteMentor);
 
-// ============================================================================
-// Export Router
-// ============================================================================
+// ==========================================
+// EXPORT ROUTER
+// ==========================================
 
 module.exports = router;

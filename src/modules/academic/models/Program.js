@@ -85,10 +85,18 @@ const programSchema = new mongoose.Schema(
 // Indexes
 // ============================================================================
 
-programSchema.index({
-  institute: 1,
-  code: 1,
-});
+programSchema.index(
+  {
+    institute: 1,
+    code: 1,
+  },
+  {
+    unique: true,
+    partialFilterExpression: {
+      isDeleted: false,
+    },
+  },
+);
 
 programSchema.index({
   institute: 1,

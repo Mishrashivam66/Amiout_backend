@@ -3,6 +3,11 @@
 const crypto = require("node:crypto");
 const mongoose = require("mongoose");
 const bcrypt = require("bcrypt");
+
+const Mentor = require("../models/Mentor");
+
+const MentorMaster = require("../../academic/models/MentorMaster");
+
 const {
   findAccountByEmail,
   normalizeEmail,
@@ -24,8 +29,10 @@ const { AUTH_CONSTANTS } = require("../constants");
 const OTP_EXPIRY_MINUTES = Number(AUTH_CONSTANTS.OTP_EXPIRY_MINUTES) || 10;
 
 const OTP_EXPIRY_MS = OTP_EXPIRY_MINUTES * 60 * 1000;
+
 const RESEND_COOLDOWN_MS = 60 * 1000;
 const MAX_OTP_ATTEMPTS = 5;
+const LOCK_MS = 60 * 1000;
 
 const OTP_SECRET = process.env.ACTIVATION_OTP_SECRET;
 
@@ -33,8 +40,15 @@ if (!OTP_SECRET) {
   throw new Error("ACTIVATION_OTP_SECRET is required.");
 }
 
+const ROLE_SCOPES = Object.freeze({
+  MENTOR: "GROUP",
+  COORDINATOR: "SECTION",
+  HOD: "DEPARTMENT",
+  HOI: "INSTITUTE",
+});
+
 // ==========================================
-// OTP MODEL
+// ACTIVATION OTP MODEL
 // ==========================================
 
 const activationSchema = new mongoose.Schema(
@@ -46,22 +60,27 @@ const activationSchema = new mongoose.Schema(
       lowercase: true,
       trim: true,
     },
+
     otpHash: {
       type: String,
       required: true,
     },
+
     expiresAt: {
       type: Date,
       required: true,
     },
+
     lastSentAt: {
       type: Date,
       required: true,
     },
+
     attempts: {
       type: Number,
       default: 0,
     },
+
     processingUntil: {
       type: Date,
       default: null,
@@ -86,6 +105,10 @@ const createError = (message, statusCode = 400) => {
   return error;
 };
 
+const clean = (value) => String(value ?? "").trim();
+
+const upper = (value) => clean(value).toUpperCase();
+
 const validateEmail = (email) => {
   const normalized = normalizeEmail(email);
 
@@ -107,25 +130,6 @@ const hashOtp = (email, otp) =>
 const generateTemporaryPassword = () =>
   `Am@9${crypto.randomBytes(18).toString("base64url")}`;
 
-const getEligibleAccount = async (email) => {
-  const result = await findAccountByEmail(email);
-
-  if (!result || !["STUDENT", "FACULTY"].includes(result.accountType)) {
-    throw createError("No eligible Student or Faculty account found.", 404);
-  }
-
-  // Never allow activation to re-enable
-  // a previously verified, disabled account.
-  if (result.account.isVerified === true) {
-    throw createError(
-      "Account already verified. Please login or contact administrator.",
-      409,
-    );
-  }
-
-  return result;
-};
-
 const getLoginUrl = () => {
   const base =
     process.env.FRONTEND_URL ||
@@ -135,12 +139,219 @@ const getLoginUrl = () => {
   return `${base.replace(/\/$/, "")}/login`;
 };
 
+const unique = (values) => [...new Set(values.filter(Boolean))];
+
+// ==========================================
+// FACULTY MASTER LOOKUP
+// ==========================================
+
+const getFacultyMasterRecords = async (email) => {
+  return MentorMaster.find({
+    mentorEmail: email,
+    isActive: true,
+    isDeleted: false,
+  }).lean();
+};
+
+// ==========================================
+// BUILD FACULTY ROLE ASSIGNMENTS
+// ==========================================
+
+const buildFacultyAssignments = (records) => {
+  if (!records.length) {
+    throw createError("No approved faculty academic record found.", 404);
+  }
+
+  const facultyIds = unique(records.map((record) => upper(record.facultyId)));
+
+  if (facultyIds.length !== 1) {
+    throw createError(
+      "Faculty master contains missing or conflicting Faculty IDs.",
+      409,
+    );
+  }
+
+  const facultyId = facultyIds[0];
+
+  const assignments = [];
+  const assignmentKeys = new Set();
+  const allRoles = new Set();
+
+  for (const record of records) {
+    const institute = upper(record.institute);
+    const department = upper(record.department);
+    const program = upper(record.program);
+    const semester = Number(record.semester);
+    const section = upper(record.section);
+    const group = upper(record.group);
+
+    const roles = unique((record.roles || []).map(upper));
+
+    if (!roles.length) {
+      throw createError("Faculty role is missing in master record.", 409);
+    }
+
+    for (const role of roles) {
+      if (!ROLE_SCOPES[role]) {
+        throw createError(`Unsupported faculty role: ${role}`, 409);
+      }
+
+      let scopeId;
+
+      if (role === "MENTOR") {
+        if (!institute || !program || !semester || !section || !group) {
+          throw createError("Mentor academic mapping is incomplete.", 409);
+        }
+
+        scopeId = `${institute}/${program}/${semester}/${section}/${group}`;
+      }
+
+      if (role === "COORDINATOR") {
+        if (
+          !institute ||
+          !program ||
+          !semester ||
+          !section ||
+          !Array.isArray(record.coordinatorGroups) ||
+          record.coordinatorGroups.length === 0
+        ) {
+          throw createError("Coordinator academic mapping is incomplete.", 409);
+        }
+
+        scopeId = `${institute}/${program}/${semester}/${section}`;
+      }
+
+      if (role === "HOD") {
+        if (!institute || !department) {
+          throw createError("HOD department mapping is incomplete.", 409);
+        }
+
+        scopeId = `${institute}/${department}`;
+      }
+
+      if (role === "HOI") {
+        if (!institute) {
+          throw createError("HOI institute mapping is incomplete.", 409);
+        }
+
+        scopeId = institute;
+      }
+
+      const scopeType = ROLE_SCOPES[role];
+      const key = `${role}:${scopeType}:${scopeId}`;
+
+      allRoles.add(role);
+
+      if (assignmentKeys.has(key)) {
+        continue;
+      }
+
+      assignmentKeys.add(key);
+
+      assignments.push({
+        role,
+        scopeType,
+        scopeId,
+        isActive: true,
+      });
+    }
+  }
+
+  if (!assignments.length) {
+    throw createError("No valid faculty academic assignments found.", 409);
+  }
+
+  const roles = [...allRoles];
+
+  return {
+    facultyId,
+    roles,
+    roleAssignments: assignments,
+  };
+};
+
+// ==========================================
+// CHECK ELIGIBLE ACCOUNT
+// ==========================================
+
+const getEligibleAccount = async (email) => {
+  const existing = await findAccountByEmail(email);
+
+  // Existing Student / Faculty account
+  if (existing) {
+    if (!["STUDENT", "FACULTY"].includes(existing.accountType)) {
+      throw createError(
+        "This email is already associated with another account.",
+        409,
+      );
+    }
+
+    if (existing.account.isVerified === true) {
+      throw createError("Account already verified. Please login.", 409);
+    }
+
+    if (existing.account.isActive === false) {
+      throw createError("Account disabled. Contact administrator.", 403);
+    }
+
+    if (existing.accountType === "FACULTY") {
+      const records = await getFacultyMasterRecords(email);
+
+      const mapping = buildFacultyAssignments(records);
+
+      if (upper(existing.account.employeeId) !== mapping.facultyId) {
+        throw createError("Faculty account and master ID mismatch.", 409);
+      }
+
+      return {
+        ...existing,
+        facultyRecords: records,
+        facultyMapping: mapping,
+      };
+    }
+
+    return existing;
+  }
+
+  // New faculty: must be approved in MentorMaster
+  const facultyRecords = await getFacultyMasterRecords(email);
+
+  if (!facultyRecords.length) {
+    throw createError("No eligible Student or Faculty account found.", 404);
+  }
+
+  const facultyMapping = buildFacultyAssignments(facultyRecords);
+
+  // Prevent another account using the same Faculty ID
+  const existingFacultyId = await Mentor.findOne({
+    employeeId: facultyMapping.facultyId,
+  });
+
+  if (existingFacultyId) {
+    throw createError("Faculty ID already belongs to another account.", 409);
+  }
+
+  return {
+    accountType: "FACULTY",
+    isNewFaculty: true,
+    account: {
+      name: facultyRecords[0].name,
+      email,
+      role: facultyMapping.roles[0],
+      isVerified: false,
+    },
+    facultyRecords,
+    facultyMapping,
+  };
+};
+
 // ==========================================
 // REQUEST ACTIVATION OTP
 // ==========================================
 
 const requestActivationOtpService = async (email) => {
   const normalizedEmail = validateEmail(email);
+
   const { account, accountType } = await getEligibleAccount(normalizedEmail);
 
   const now = new Date();
@@ -193,8 +404,6 @@ const requestActivationOtpService = async (email) => {
   } catch (error) {
     console.error("Activation OTP delivery failed:", error.message);
 
-    // Invalidate only this OTP, not one
-    // generated by a newer request.
     await ActivationOTP.deleteOne({
       email: normalizedEmail,
       otpHash,
@@ -216,16 +425,15 @@ const requestActivationOtpService = async (email) => {
 
 const verifyActivationOtpService = async (email, otp) => {
   const normalizedEmail = validateEmail(email);
-  const enteredOtp = String(otp || "").trim();
+  const enteredOtp = clean(otp);
 
   if (!/^\d{6}$/.test(enteredOtp)) {
     throw createError("Enter a valid 6-digit OTP.");
   }
 
-  const { account, accountType } = await getEligibleAccount(normalizedEmail);
-
   const now = new Date();
 
+  // Lock the OTP before provisioning an account
   const record = await ActivationOTP.findOneAndUpdate(
     {
       email: normalizedEmail,
@@ -240,7 +448,7 @@ const verifyActivationOtpService = async (email, otp) => {
     {
       $inc: { attempts: 1 },
       $set: {
-        processingUntil: new Date(now.getTime() + 60 * 1000),
+        processingUntil: new Date(now.getTime() + LOCK_MS),
       },
     },
     { new: true },
@@ -255,70 +463,180 @@ const verifyActivationOtpService = async (email, otp) => {
 
   const releaseLock = async () => {
     await ActivationOTP.updateOne(
-      { _id: record._id },
-      { $set: { processingUntil: null } },
+      {
+        _id: record._id,
+        otpHash: record.otpHash,
+      },
+      {
+        $set: { processingUntil: null },
+      },
     );
   };
 
   const expectedHash = Buffer.from(record.otpHash, "hex");
+
   const enteredHash = Buffer.from(hashOtp(normalizedEmail, enteredOtp), "hex");
 
-  const valid =
+  const isValid =
     expectedHash.length === enteredHash.length &&
     crypto.timingSafeEqual(expectedHash, enteredHash);
 
-  if (!valid) {
+  if (!isValid) {
     await releaseLock();
     throw createError("Incorrect activation OTP.");
   }
 
-  const temporaryPassword = generateTemporaryPassword();
-
-  let hashedPassword;
+  let eligibility;
 
   try {
-    hashedPassword = await bcrypt.hash(temporaryPassword, 10);
+    eligibility = await getEligibleAccount(normalizedEmail);
   } catch (error) {
     await releaseLock();
     throw error;
   }
 
-  const AccountModel = account.constructor;
+  const { account, accountType, isNewFaculty, facultyRecords, facultyMapping } =
+    eligibility;
+
+  const temporaryPassword = generateTemporaryPassword();
 
   let updatedAccount;
 
   try {
-    updatedAccount = await AccountModel.findOneAndUpdate(
-      {
-        _id: account._id,
-        isVerified: false,
-      },
-      {
-        $set: {
-          password: hashedPassword,
-          isVerified: true,
+    if (isNewFaculty) {
+      // ======================================
+      // CREATE NEW FACULTY LOGIN ACCOUNT
+      // ======================================
+
+      const primaryRecord = facultyRecords[0];
+
+      // Mentor.js pre-save middleware hashes
+      // the password automatically.
+      updatedAccount = await Mentor.create({
+        name: clean(primaryRecord.name),
+        email: normalizedEmail,
+        employeeId: facultyMapping.facultyId,
+        designation: clean(primaryRecord.designation),
+        department: upper(primaryRecord.department),
+        password: temporaryPassword,
+        role: facultyMapping.roles[0],
+        roles: facultyMapping.roles,
+        roleAssignments: facultyMapping.roleAssignments,
+        isVerified: true,
+        isActive: true,
+        mustChangePassword: true,
+      });
+
+      // Link academic master records to login
+      await MentorMaster.updateMany(
+        {
+          _id: {
+            $in: facultyRecords.map((item) => item._id),
+          },
+          mentorEmail: normalizedEmail,
           isActive: true,
-          mustChangePassword: true,
-          passwordChangedAt: new Date(),
+          isDeleted: false,
+          $or: [{ mentorUser: null }, { mentorUser: updatedAccount._id }],
         },
-      },
-      {
-        new: true,
-        runValidators: false,
-      },
-    );
+        {
+          $set: {
+            mentorUser: updatedAccount._id,
+          },
+        },
+      );
+    } else {
+      // ======================================
+      // EXISTING STUDENT / FACULTY ACTIVATION
+      // ======================================
+
+      const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
+
+      const AccountModel = account.constructor;
+
+      const update = {
+        password: hashedPassword,
+        isVerified: true,
+        mustChangePassword: true,
+        passwordChangedAt: new Date(),
+      };
+
+      // Refresh approved roles on pending
+      // faculty accounts.
+      if (accountType === "FACULTY") {
+        const primaryRecord = facultyRecords[0];
+
+        update.name = clean(primaryRecord.name);
+        update.employeeId = facultyMapping.facultyId;
+        update.designation = clean(primaryRecord.designation);
+        update.department = upper(primaryRecord.department);
+        update.role = facultyMapping.roles[0];
+        update.roles = facultyMapping.roles;
+        update.roleAssignments = facultyMapping.roleAssignments;
+      }
+
+      updatedAccount = await AccountModel.findOneAndUpdate(
+        {
+          _id: account._id,
+          isVerified: false,
+          isActive: { $ne: false },
+        },
+        {
+          $set: update,
+        },
+        {
+          new: true,
+          runValidators: true,
+        },
+      );
+
+      if (!updatedAccount) {
+        throw createError("Account already activated or unavailable.", 409);
+      }
+
+      if (accountType === "FACULTY") {
+        await MentorMaster.updateMany(
+          {
+            _id: {
+              $in: facultyRecords.map((item) => item._id),
+            },
+            mentorEmail: normalizedEmail,
+            isActive: true,
+            isDeleted: false,
+            $or: [{ mentorUser: null }, { mentorUser: updatedAccount._id }],
+          },
+          {
+            $set: {
+              mentorUser: updatedAccount._id,
+            },
+          },
+        );
+      }
+    }
   } catch (error) {
     await releaseLock();
+
+    if (error.code === 11000) {
+      throw createError(
+        "Faculty account already exists or identity conflict detected.",
+        409,
+      );
+    }
+
     throw error;
   }
 
-  if (!updatedAccount) {
-    await releaseLock();
-    throw createError(
-      "Account is already activated or could not be updated.",
-      409,
-    );
-  }
+  // ======================================
+  // CONSUME OTP
+  // ======================================
+
+  await ActivationOTP.deleteOne({
+    _id: record._id,
+    otpHash: record.otpHash,
+  });
+
+  // ======================================
+  // TEMPORARY PASSWORD EMAIL
+  // ======================================
 
   try {
     await sendEmail({
@@ -336,16 +654,14 @@ const verifyActivationOtpService = async (email, otp) => {
     console.error("Temporary password delivery failed:", error.message);
 
     throw createError(
-      "Account activated, but temporary password email delivery failed. Contact administrator for recovery.",
+      "Account activated, but temporary password email delivery failed. Use password recovery or contact administrator.",
       502,
     );
-  } finally {
-    await ActivationOTP.deleteOne({ _id: record._id });
   }
 
-  // ==========================================
-  // SEND WELCOME EMAIL
-  // ==========================================
+  // ======================================
+  // WELCOME EMAIL
+  // ======================================
 
   try {
     await sendEmail({
@@ -356,18 +672,9 @@ const verifyActivationOtpService = async (email, otp) => {
         role: updatedAccount.role || accountType,
       }),
     });
-
-    console.log("Welcome email sent successfully.");
   } catch (error) {
     console.error("Welcome email failed:", error.message);
-
-    // Welcome email failure should not
-    // affect successful account activation.
   }
-
-  // ==========================================
-  // SUCCESS RESPONSE
-  // ==========================================
 
   return {
     success: true,
@@ -381,8 +688,9 @@ const verifyActivationOtpService = async (email, otp) => {
 // RESEND ACTIVATION OTP
 // ==========================================
 
-const resendActivationOtpService = async (email) =>
-  requestActivationOtpService(email);
+const resendActivationOtpService = async (email) => {
+  return requestActivationOtpService(email);
+};
 
 // ==========================================
 // EXPORTS

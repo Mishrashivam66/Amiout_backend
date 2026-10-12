@@ -4,7 +4,7 @@
 // SEMESTER MAPPING
 // ==========================================
 
-const semesterMap = {
+const semesterMap = Object.freeze({
   "I SEMESTER": 1,
   "II SEMESTER": 2,
   "III SEMESTER": 3,
@@ -13,7 +13,7 @@ const semesterMap = {
   "VI SEMESTER": 6,
   "VII SEMESTER": 7,
   "VIII SEMESTER": 8,
-};
+});
 
 const VALID_ROLES = new Set(["MENTOR", "COORDINATOR", "HOD", "HOI"]);
 
@@ -44,7 +44,7 @@ const getValue = (row, ...headers) => {
   for (const header of headers) {
     const value = row[normalizeHeader(header)];
 
-    if (value !== undefined && clean(value) !== "") {
+    if (value !== undefined && value !== null && clean(value) !== "") {
       return value;
     }
   }
@@ -53,13 +53,15 @@ const getValue = (row, ...headers) => {
 };
 
 // ==========================================
-// SEMESTER
+// SEMESTER PARSER
 // ==========================================
 
 const parseSemester = (value) => {
   const normalized = upper(value);
 
-  if (!normalized) return null;
+  if (!normalized) {
+    return null;
+  }
 
   if (semesterMap[normalized]) {
     return semesterMap[normalized];
@@ -75,37 +77,45 @@ const parseSemester = (value) => {
 };
 
 // ==========================================
-// ROLES ARRAY
+// ROLES PARSER
 // ==========================================
 
 const parseRoles = (value) => {
-  const raw = clean(value);
+  const values = Array.isArray(value)
+    ? value
+    : clean(value)
+        .replace(/[\[\]"]/g, "")
+        .split(/[,;+]/);
 
-  if (!raw) return [];
-
-  const roles = raw
-    .replace(/[\[\]"]/g, "")
-    .split(/[,;+]/)
-    .map(upper)
-    .filter(Boolean);
-
-  return [...new Set(roles)];
+  return [
+    ...new Set(
+      values
+        .flatMap((item) => clean(item).split(/[,;+]/))
+        .map(upper)
+        .filter(Boolean),
+    ),
+  ];
 };
 
 // ==========================================
-// COORDINATOR GROUPS ARRAY
+// COORDINATOR GROUPS PARSER
 // ==========================================
 
 const parseGroups = (value) => {
-  const raw = clean(value);
+  const values = Array.isArray(value) ? value : clean(value).split(/[,;]+/);
 
-  if (!raw) return [];
-
-  return [...new Set(raw.split(/[,;]+/).map(upper).filter(Boolean))];
+  return [
+    ...new Set(
+      values
+        .flatMap((item) => clean(item).split(/[,;]+/))
+        .map(upper)
+        .filter(Boolean),
+    ),
+  ];
 };
 
 // ==========================================
-// MAP MENTOR / FACULTY EXCEL ROWS
+// FACULTY EXCEL MAPPER
 // ==========================================
 
 const mapMentorRows = (rows = []) => {
@@ -116,6 +126,10 @@ const mapMentorRows = (rows = []) => {
   return rows.map((originalRow, index) => {
     const row = normalizeRow(originalRow);
 
+    // ======================================
+    // FACULTY IDENTITY
+    // ======================================
+
     const facultyId = upper(
       getValue(row, "Faculty ID", "Employee ID", "Faculty Code"),
     );
@@ -125,10 +139,31 @@ const mapMentorRows = (rows = []) => {
     );
 
     const mentorEmail = lower(
-      getValue(row, "Faculty Email", "Official Email", "Mentor Email", "Email"),
+      getValue(
+        row,
+        "Faculty Official Email",
+        "Faculty Email",
+        "Official Email",
+        "Mentor Email",
+        "Email",
+      ),
     );
 
     const designation = clean(getValue(row, "Designation"));
+
+    // ======================================
+    // FACULTY ROLES
+    // ======================================
+
+    const rawRoles = getValue(row, "Roles", "Role", "Role(s)");
+
+    const roles = clean(rawRoles) === "" ? ["MENTOR"] : parseRoles(rawRoles);
+
+    const invalidRoles = roles.filter((role) => !VALID_ROLES.has(role));
+
+    // ======================================
+    // ACADEMIC DETAILS
+    // ======================================
 
     const institute = upper(getValue(row, "Institute", "Institute Code"));
 
@@ -144,22 +179,47 @@ const mapMentorRows = (rows = []) => {
       getValue(row, "Mentor Group", "Group", "Group (as per Amizone)"),
     );
 
-    const coordinatorGroups = parseGroups(getValue(row, "Coordinator Groups"));
+    // ======================================
+    // COORDINATOR GROUPS
+    // ======================================
 
-    const rawRoles = getValue(row, "Roles", "Role");
+    const coordinatorGroups = parseGroups(
+      getValue(
+        row,
+        "Coordinator Groups (comma separated)",
+        "Coordinator Groups",
+        "Coordinator Group",
+        "Groups Coordinated",
+      ),
+    );
 
-    const roles = parseRoles(rawRoles);
+    // ======================================
+    // COURSE
+    // ======================================
 
-    // Legacy Excel did not contain roles.
-    const finalRoles = clean(rawRoles) === "" ? ["MENTOR"] : roles;
+    // Only use a course if it is explicitly
+    // provided. Do not invent a course name
+    // from Program + Section.
 
     const course =
-      upper(getValue(row, "Course Name", "Course")) ||
-      (program && section ? `${program}, SECTION ${section}` : program);
+      upper(getValue(row, "Course Name", "Course", "Course Code")) || program;
+
+    // ======================================
+    // COORDINATOR NAME
+    // ======================================
 
     const coordinator = clean(
-      getValue(row, "Name of Class Coordinator", "Coordinator Name"),
+      getValue(
+        row,
+        "Name of Class Coordinator",
+        "Coordinator Name",
+        "Coordinator",
+      ),
     );
+
+    // ======================================
+    // TOTAL STUDENTS
+    // ======================================
 
     const totalStudentsRaw = getValue(
       row,
@@ -168,9 +228,32 @@ const mapMentorRows = (rows = []) => {
       "Total Students",
     );
 
-    const totalStudents = Math.max(0, Number(totalStudentsRaw) || 0);
+    const totalStudentsNumber = Number(totalStudentsRaw);
 
-    const invalidRoles = finalRoles.filter((role) => !VALID_ROLES.has(role));
+    const totalStudents =
+      clean(totalStudentsRaw) !== "" && Number.isFinite(totalStudentsNumber)
+        ? Math.max(0, Math.floor(totalStudentsNumber))
+        : 0;
+
+    // ======================================
+    // ADDITIONAL EXCEL DETAILS
+    // ======================================
+
+    const contactNumber = clean(
+      getValue(
+        row,
+        "Contact Number (optional)",
+        "Contact Number",
+        "Mobile Number",
+        "Phone Number",
+      ),
+    );
+
+    const notes = clean(getValue(row, "Notes (optional)", "Notes", "Remarks"));
+
+    // ======================================
+    // FINAL MAPPED RECORD
+    // ======================================
 
     return {
       rowNumber: index + 2,
@@ -180,7 +263,7 @@ const mapMentorRows = (rows = []) => {
       mentorEmail,
       designation,
 
-      roles: finalRoles,
+      roles,
       invalidRoles,
 
       institute,
@@ -193,15 +276,17 @@ const mapMentorRows = (rows = []) => {
       group,
 
       coordinatorGroups,
-
       coordinator,
       totalStudents,
+
+      contactNumber,
+      notes,
     };
   });
 };
 
 // ==========================================
-// EXPORT
+// EXPORTS
 // ==========================================
 
 module.exports = Object.freeze({

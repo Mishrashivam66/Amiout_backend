@@ -1,11 +1,7 @@
 "use strict";
 
-const crypto = require("crypto");
-const mongoose = require("mongoose");
-
-const Mentor = require("../../auth/models/Mentor"); // Adjust actual path
+const Mentor = require("../../auth/models/Mentor");
 const MentorMaster = require("../models/MentorMaster");
-const StudentMaster = require("../models/StudentMaster"); // Adjust path
 
 const mentorRepository = require("../repositories/mentorMaster.repository");
 
@@ -18,59 +14,54 @@ const ROLE_SCOPES = {
   HOI: "INSTITUTE",
 };
 
-const upper = (v) =>
-  String(v ?? "")
-    .trim()
-    .toUpperCase();
-const lower = (v) =>
-  String(v ?? "")
-    .trim()
-    .toLowerCase();
-const clean = (v) => String(v ?? "").trim();
+const clean = (value) => String(value ?? "").trim();
+
+const upper = (value) => clean(value).toUpperCase();
+
+const lower = (value) => clean(value).toLowerCase();
 
 const unique = (items) => [...new Set(items.filter(Boolean))];
 
 const parseList = (value) => {
-  if (Array.isArray(value)) {
-    return unique(value.map(upper));
-  }
+  const values = Array.isArray(value) ? value : clean(value).split(/[,;+]/);
 
-  return unique(clean(value).split(/[,;]+/).map(upper));
+  return unique(
+    values.flatMap((item) => clean(item).split(/[,;+]/).map(upper)),
+  );
 };
 
-const makeScopeId = ({
-  role,
-  institute,
-  department,
-  program,
-  semester,
-  section,
-  group,
-}) => {
-  const i = upper(institute);
-  const d = upper(department);
-  const p = upper(program);
-  const s = Number(semester);
-  const sec = upper(section);
-  const g = upper(group);
+const sameId = (a, b) => String(a ?? "") === String(b ?? "");
+
+const makeScopeId = (record, role) => {
+  const institute = upper(record.institute);
+  const department = upper(record.department);
+  const program = upper(record.program);
+  const semester = Number(record.semester);
+  const section = upper(record.section);
+  const group = upper(record.group);
 
   if (role === "MENTOR") {
-    if (!i || !p || !s || !sec || !g) return null;
-    return `${i}/${p}/${s}/${sec}/${g}`;
+    if (!institute || !program || !semester || !section || !group) {
+      return null;
+    }
+
+    return `${institute}/${program}/${semester}/${section}/${group}`;
   }
 
   if (role === "COORDINATOR") {
-    if (!i || !p || !s || !sec) return null;
-    return `${i}/${p}/${s}/${sec}`;
+    if (!institute || !program || !semester || !section) {
+      return null;
+    }
+
+    return `${institute}/${program}/${semester}/${section}`;
   }
 
   if (role === "HOD") {
-    if (!i || !d) return null;
-    return `${i}/${d}`;
+    return institute && department ? `${institute}/${department}` : null;
   }
 
   if (role === "HOI") {
-    return i || null;
+    return institute || null;
   }
 
   return null;
@@ -85,60 +76,25 @@ const buildAssignments = (record) => {
       throw new Error(`Invalid role: ${role}`);
     }
 
-    if (role === "MENTOR") {
-      const scopeId = makeScopeId({
-        ...record,
-        role,
-        group: record.group,
-      });
-
-      if (!scopeId) {
-        throw new Error("Mentor academic scope is incomplete.");
-      }
-
-      assignments.push({
-        role,
-        scopeType: ROLE_SCOPES[role],
-        scopeId,
-      });
+    if (
+      role === "COORDINATOR" &&
+      parseList(record.coordinatorGroups).length === 0
+    ) {
+      throw new Error("Coordinator Groups are required.");
     }
 
-    if (role === "COORDINATOR") {
-      const groups = parseList(record.coordinatorGroups);
+    const scopeId = makeScopeId(record, role);
 
-      if (groups.length === 0) {
-        throw new Error("Coordinator Groups are required.");
-      }
-
-      // SECTION scope covers the entire section.
-      // Restricting to selected groups requires GROUP-level
-      // coordinator assignments or a separate mapping model.
-      const scopeId = makeScopeId({ ...record, role });
-
-      if (!scopeId) {
-        throw new Error("Coordinator academic scope is incomplete.");
-      }
-
-      assignments.push({
-        role,
-        scopeType: ROLE_SCOPES[role],
-        scopeId,
-      });
+    if (!scopeId) {
+      throw new Error(`${role} academic scope is incomplete.`);
     }
 
-    if (role === "HOD" || role === "HOI") {
-      const scopeId = makeScopeId({ ...record, role });
-
-      if (!scopeId) {
-        throw new Error(`${role} scope is incomplete.`);
-      }
-
-      assignments.push({
-        role,
-        scopeType: ROLE_SCOPES[role],
-        scopeId,
-      });
-    }
+    assignments.push({
+      role,
+      scopeType: ROLE_SCOPES[role],
+      scopeId,
+      isActive: true,
+    });
   }
 
   return assignments;
@@ -148,14 +104,14 @@ const mergeAssignments = (existing = [], incoming = []) => {
   const result = [...existing];
 
   for (const assignment of incoming) {
-    const exists = result.some(
+    const found = result.some(
       (item) =>
         item.role === assignment.role &&
         item.scopeType === assignment.scopeType &&
         item.scopeId === assignment.scopeId,
     );
 
-    if (!exists) {
+    if (!found) {
       result.push(assignment);
     }
   }
@@ -163,8 +119,89 @@ const mergeAssignments = (existing = [], incoming = []) => {
   return result;
 };
 
+const validateRecord = (record) => {
+  const facultyId = upper(record.facultyId);
+  const mentorName = clean(record.mentorName);
+  const mentorEmail = lower(record.mentorEmail);
+
+  const roles = parseList(record.roles);
+
+  const institute = upper(record.institute);
+  const department = upper(record.department);
+  const program = upper(record.program);
+  const course = upper(record.course);
+  const semester = Number(record.semester);
+  const section = upper(record.section);
+  const group = upper(record.group);
+
+  const coordinatorGroups = parseList(record.coordinatorGroups);
+
+  if (!facultyId || !mentorName || !mentorEmail) {
+    throw new Error("Faculty ID, Faculty Name and Faculty Email are required.");
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mentorEmail)) {
+    throw new Error("Invalid Faculty Email.");
+  }
+
+  if (!roles.length) {
+    throw new Error("At least one faculty role is required.");
+  }
+
+  for (const role of roles) {
+    if (!VALID_ROLES.has(role)) {
+      throw new Error(`Invalid role: ${role}`);
+    }
+  }
+
+  // These fields are required by MentorMaster.js.
+  if (
+    !institute ||
+    !department ||
+    !program ||
+    !course ||
+    !section ||
+    !group ||
+    !Number.isInteger(semester) ||
+    semester < 1 ||
+    semester > 12
+  ) {
+    throw new Error(
+      "Institute, Department, Program, Course, Semester, Section and Group are required.",
+    );
+  }
+
+  if (roles.includes("COORDINATOR") && coordinatorGroups.length === 0) {
+    throw new Error("Coordinator Groups are required for COORDINATOR.");
+  }
+
+  const normalized = {
+    facultyId,
+    mentorName,
+    mentorEmail,
+    designation: clean(record.designation),
+    roles,
+    institute,
+    department,
+    program,
+    course,
+    semester,
+    section,
+    group,
+    coordinatorGroups,
+    coordinator: clean(record.coordinator),
+    totalStudents: Number.isFinite(Number(record.totalStudents))
+      ? Math.max(0, Math.floor(Number(record.totalStudents)))
+      : 0,
+  };
+
+  buildAssignments(normalized);
+
+  return normalized;
+};
+
 // ==========================================
-// IMPORT FACULTY / MENTOR RECORDS
+// IMPORT FACULTY EXCEL RECORDS
 // ==========================================
 
 const importMentors = async (records = []) => {
@@ -177,135 +214,248 @@ const importMentors = async (records = []) => {
   const duplicateMentors = [];
   const failedMentors = [];
 
+  // Protect against inconsistent Faculty ID/email
+  // pairs inside the same uploaded file.
+  const emailByFacultyId = new Map();
+  const facultyIdByEmail = new Map();
+
   for (const record of records) {
     try {
-      const facultyId = upper(record.facultyId);
-      const email = lower(record.mentorEmail);
-      const name = clean(record.mentorName);
-      const roles = parseList(record.roles);
+      const data = validateRecord(record);
 
-      if (!facultyId || !email || !name) {
+      const {
+        facultyId,
+        mentorName,
+        mentorEmail,
+        designation,
+        roles,
+        institute,
+        department,
+        program,
+        course,
+        semester,
+        section,
+        group,
+        coordinatorGroups,
+        coordinator,
+        totalStudents,
+      } = data;
+
+      const knownEmail = emailByFacultyId.get(facultyId);
+
+      const knownFacultyId = facultyIdByEmail.get(mentorEmail);
+
+      if (
+        (knownEmail && knownEmail !== mentorEmail) ||
+        (knownFacultyId && knownFacultyId !== facultyId)
+      ) {
+        throw new Error("Conflicting Faculty ID and email mapping in Excel.");
+      }
+
+      emailByFacultyId.set(facultyId, mentorEmail);
+
+      facultyIdByEmail.set(mentorEmail, facultyId);
+
+      // ======================================
+      // CHECK EXISTING MASTER IDENTITY
+      // ======================================
+
+      const existingByFacultyId = await MentorMaster.findOne({
+        facultyId,
+        isDeleted: false,
+        mentorEmail: {
+          $nin: [mentorEmail],
+        },
+      });
+
+      if (existingByFacultyId) {
         throw new Error(
-          "Faculty ID, Faculty Name and Faculty Email are required.",
+          "Faculty ID is already associated with a different email.",
         );
       }
 
-      if (roles.length === 0) {
-        throw new Error("At least one faculty role is required.");
+      const existingByEmail = await MentorMaster.findOne({
+        mentorEmail,
+        isDeleted: false,
+        facultyId: {
+          $nin: [facultyId],
+        },
+      });
+
+      if (existingByEmail) {
+        throw new Error(
+          "Faculty email is already associated with a different Faculty ID.",
+        );
       }
 
-      const assignments = buildAssignments(record);
-
       // ======================================
-      // FIND EXISTING FACULTY ACCOUNT
+      // OPTIONAL EXISTING LOGIN LINK
       // ======================================
 
       const byEmployeeId = await Mentor.findOne({
         employeeId: facultyId,
       });
 
-      const byEmail = await Mentor.findOne({ email });
+      const byEmail = await Mentor.findOne({
+        email: mentorEmail,
+      });
 
-      if (
-        byEmployeeId &&
-        byEmail &&
-        String(byEmployeeId._id) !== String(byEmail._id)
-      ) {
-        throw new Error("Faculty ID and email belong to different accounts.");
+      if (byEmployeeId && byEmail && !sameId(byEmployeeId._id, byEmail._id)) {
+        throw new Error(
+          "Faculty ID and email belong to different login accounts.",
+        );
       }
 
-      let faculty = byEmployeeId || byEmail;
+      const faculty = byEmployeeId || byEmail;
 
-      if (!faculty) {
-        // Do not create an inaccessible account with a
-        // password nobody can securely receive.
-        //
-        // Implement invitation / password setup first.
-        failedMentors.push({
+      if (faculty) {
+        if (
+          upper(faculty.employeeId) !== facultyId ||
+          lower(faculty.email) !== mentorEmail
+        ) {
+          throw new Error(
+            "Existing Faculty login identity does not match Excel.",
+          );
+        }
+      }
+
+      // ======================================
+      // CHECK EXACT ACADEMIC ASSIGNMENT
+      // ======================================
+
+      const assignmentFilter = {
+        facultyId,
+        mentorEmail,
+        institute,
+        department,
+        program,
+        semester,
+        section,
+        group,
+        isDeleted: false,
+      };
+
+      const existingMaster = await MentorMaster.findOne(assignmentFilter);
+
+      const masterPayload = {
+        facultyId,
+        name: mentorName,
+        mentorEmail,
+        designation,
+        roles,
+        institute,
+        department,
+        program,
+        course,
+        semester,
+        section,
+        group,
+        coordinatorGroups,
+        coordinator,
+        totalStudents,
+        isActive: true,
+        isDeleted: false,
+      };
+
+      // ======================================
+      // EXISTING ASSIGNMENT
+      // ======================================
+
+      if (existingMaster) {
+        const previous = {
+          name: existingMaster.name,
+          designation: existingMaster.designation,
+          roles: [...(existingMaster.roles || [])],
+          course: existingMaster.course,
+          coordinatorGroups: [...(existingMaster.coordinatorGroups || [])],
+          coordinator: existingMaster.coordinator,
+          totalStudents: existingMaster.totalStudents,
+        };
+
+        const next = {
+          name: mentorName,
+          designation,
+          roles,
+          course,
+          coordinatorGroups,
+          coordinator,
+          totalStudents,
+        };
+
+        if (JSON.stringify(previous) === JSON.stringify(next)) {
+          duplicateMentors.push({
+            rowNumber: record.rowNumber,
+            facultyId,
+            mentorMasterId: existingMaster._id,
+          });
+
+          continue;
+        }
+
+        Object.assign(existingMaster, masterPayload);
+
+        if (faculty) {
+          if (
+            existingMaster.mentorUser &&
+            !sameId(existingMaster.mentorUser, faculty._id)
+          ) {
+            throw new Error(
+              "Academic record linked to a different faculty account.",
+            );
+          }
+
+          existingMaster.mentorUser = faculty._id;
+        }
+
+        await existingMaster.save();
+
+        updatedMentors.push({
           rowNumber: record.rowNumber,
           facultyId,
-          reason:
-            "Faculty login account does not exist. Secure invitation setup is required.",
+          mentorMasterId: existingMaster._id,
         });
-
-        continue;
-      }
-
-      if (faculty.employeeId !== facultyId) {
-        throw new Error("Existing account Faculty ID does not match Excel.");
-      }
-
-      faculty.name = name;
-      faculty.email = email;
-      faculty.designation = clean(record.designation);
-      faculty.department = upper(record.department);
-
-      faculty.roles = unique([...(faculty.roles || []), ...roles]);
-
-      faculty.roleAssignments = mergeAssignments(
-        faculty.roleAssignments || [],
-        assignments,
-      );
-
-      await faculty.save();
-
-      // ======================================
-      // MENTOR MASTER GROUP MAPPING
-      // ======================================
-
-      if (roles.includes("MENTOR")) {
-        const course = upper(record.course);
-        const semester = Number(record.semester);
-        const section = upper(record.section);
-        const group = upper(record.group);
-
-        if (!course || !semester || !group) {
-          throw new Error("Mentor course, semester and group are required.");
-        }
-
-        const master = await MentorMaster.findOne({
-          course,
-          semester,
-          group,
-          $or: [{ mentorEmail: email }, { mentorUser: faculty._id }],
-          isDeleted: false,
-        });
-
-        if (master) {
-          master.name = name;
-          master.mentorEmail = email;
-          master.section = section;
-          master.mentorUser = faculty._id;
-
-          await master.save();
-
-          updatedMentors.push({
-            facultyId,
-            mentorMasterId: master._id,
-          });
-        } else {
-          const newMaster = await MentorMaster.create({
-            name,
-            course,
-            semester,
-            section,
-            group,
-            mentorEmail: email,
-            mentorUser: faculty._id,
-            coordinator: clean(record.coordinator),
-            totalStudents: 0,
-          });
-
-          importedMentors.push({
-            facultyId,
-            mentorMasterId: newMaster._id,
-          });
-        }
       } else {
-        updatedMentors.push({
-          facultyId,
-          message: "Faculty role assignments updated.",
+        // ======================================
+        // NEW ACADEMIC ASSIGNMENT
+        // ======================================
+
+        const newMaster = await MentorMaster.create({
+          ...masterPayload,
+          mentorUser: faculty ? faculty._id : null,
         });
+
+        importedMentors.push({
+          rowNumber: record.rowNumber,
+          facultyId,
+          mentorMasterId: newMaster._id,
+        });
+      }
+
+      // ======================================
+      // SYNC EXISTING FACULTY ROLES
+      // ======================================
+
+      // Newly imported faculty have no login yet.
+      // OTP activation creates it later.
+      //
+      // Existing verified faculty retain their
+      // login/password and gain new approved scopes.
+
+      if (faculty) {
+        const assignments = buildAssignments(data);
+
+        faculty.name = mentorName;
+        faculty.designation = designation;
+        faculty.department = department;
+
+        faculty.roles = unique([...(faculty.roles || []), ...roles]);
+
+        faculty.roleAssignments = mergeAssignments(
+          faculty.roleAssignments || [],
+          assignments,
+        );
+
+        await faculty.save();
       }
     } catch (error) {
       failedMentors.push({

@@ -51,31 +51,156 @@ const importMentors = asyncHandler(async (req, res) => {
       });
     }
 
-    const sheetName = workbook.SheetNames[0];
-
-    if (!sheetName) {
+    if (!workbook.SheetNames.length) {
       return res.status(400).json({
         success: false,
         message: "Excel workbook contains no sheets.",
       });
     }
 
-    const worksheet = workbook.Sheets[sheetName];
+    console.log("\n========== EXCEL STRUCTURE ==========");
 
-    const rows = XLSX.utils.sheet_to_json(worksheet, {
-      defval: "",
-      raw: false,
-      blankrows: false,
-    });
+    for (const sheetName of workbook.SheetNames) {
+      const worksheet = workbook.Sheets[sheetName];
+
+      const matrix = XLSX.utils.sheet_to_json(worksheet, {
+        header: 1,
+        defval: "",
+        raw: false,
+        blankrows: true,
+      });
+
+      console.log("SHEET:", sheetName);
+      console.log("TOTAL ROWS:", matrix.length);
+
+      matrix.slice(0, 20).forEach((row, index) => {
+        console.log(`ROW ${index + 1}:`, JSON.stringify(row));
+      });
+    }
+
+    console.log("=====================================\n");
+
+    // ======================================
+    // NORMALIZE EXCEL HEADERS
+    // ======================================
+
+    const normalizeHeader = (value) =>
+      String(value ?? "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+
+    const facultyIdHeaders = ["facultyid", "employeeid", "mentorid"];
+
+    const facultyNameHeaders = ["facultyname", "mentorname", "name"];
+
+    const facultyEmailHeaders = [
+      "facultyofficialemail",
+      "facultyemail",
+      "mentoremail",
+      "officialemail",
+      "email",
+    ];
+
+    // ======================================
+    // AUTO DETECT SHEET AND HEADER ROW
+    // ======================================
+
+    let detectedSheet = null;
+    let detectedHeaderRow = -1;
+    let rows = [];
+
+    for (const sheetName of workbook.SheetNames) {
+      const worksheet = workbook.Sheets[sheetName];
+
+      if (!worksheet || !worksheet["!ref"]) {
+        continue;
+      }
+
+      const matrix = XLSX.utils.sheet_to_json(worksheet, {
+        header: 1,
+        defval: "",
+        raw: false,
+        blankrows: false,
+      });
+
+      const headerIndex = matrix.findIndex((row) => {
+        const headers = row.map(normalizeHeader);
+
+        const hasFacultyId = facultyIdHeaders.some((key) =>
+          headers.includes(key),
+        );
+
+        const hasFacultyName = facultyNameHeaders.some((key) =>
+          headers.includes(key),
+        );
+
+        const hasFacultyEmail = facultyEmailHeaders.some((key) =>
+          headers.includes(key),
+        );
+
+        return hasFacultyId && hasFacultyName && hasFacultyEmail;
+      });
+
+      if (headerIndex === -1) {
+        continue;
+      }
+
+      // Convert matrix row index to actual
+      // worksheet row index.
+      const sheetRange = XLSX.utils.decode_range(worksheet["!ref"]);
+
+      const actualHeaderRow = sheetRange.s.r + headerIndex;
+
+      rows = XLSX.utils.sheet_to_json(worksheet, {
+        range: actualHeaderRow,
+        defval: "",
+        raw: false,
+        blankrows: false,
+      });
+
+      detectedSheet = sheetName;
+      detectedHeaderRow = actualHeaderRow + 1;
+
+      break;
+    }
+
+    if (!detectedSheet) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Faculty headers not found. Excel must contain Faculty ID, Faculty Name and Faculty Official Email columns.",
+      });
+    }
+
+    // ======================================
+    // REMOVE COMPLETELY EMPTY ROWS
+    // ======================================
+
+    rows = rows.filter((row) =>
+      Object.values(row).some((value) => String(value ?? "").trim() !== ""),
+    );
 
     if (rows.length === 0) {
       return res.status(400).json({
         success: false,
-        message: "Excel sheet is empty.",
+        message: "No faculty records found below the Excel header row.",
       });
     }
 
+    // ======================================
+    // MAP EXCEL DATA
+    // ======================================
+
     records = mapMentorRows(rows);
+
+    console.log("FACULTY SHEET:", detectedSheet);
+
+    console.log("FACULTY HEADER ROW:", detectedHeaderRow);
+
+    console.log("FACULTY RECORDS:", records.length);
+
+    console.log("MAPPED FIRST RECORD:", JSON.stringify(records[0], null, 2));
   }
 
   // ======================================
@@ -95,6 +220,8 @@ const importMentors = asyncHandler(async (req, res) => {
   // ======================================
 
   const result = await mentorImportService.importMentors(records);
+
+  console.log("FACULTY IMPORT RESULT:", JSON.stringify(result, null, 2));
 
   return res.status(result.summary?.failedRecords > 0 ? 207 : 201).json({
     success: result.success,

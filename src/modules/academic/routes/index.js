@@ -1,41 +1,62 @@
+"use strict";
+
 const express = require("express");
 
-console.log("✅ academic/routes/index.js loaded");
 const router = express.Router();
+
+// ==========================================
+// IMPORT ROUTES
+// ==========================================
 
 const instituteRoutes = require("./institute.routes");
 const programRoutes = require("./program.routes");
 const studentImportRoutes = require("./studentImport.routes");
 const mentorImportRoutes = require("./mentorImport.routes");
+
+// ==========================================
+// ACADEMIC MANAGEMENT ROUTES
+// ==========================================
+
 const mentorRoutes = require("./mentor.routes");
 const mappingRoutes = require("./mapping.routes");
 const groupRoutes = require("./group.routes");
 const testRoutes = require("./test.routes");
-console.log("✅ test.routes loaded");
-// ============================================================================
-// Academic Module Routes
-// ============================================================================
+
+// ==========================================
+// INSTITUTE & PROGRAM ROUTES
+// ==========================================
 
 router.use("/institutes", instituteRoutes);
-
 router.use("/programs", programRoutes);
 
-router.use("/students", studentImportRoutes);
+// ==========================================
+// STUDENT & FACULTY IMPORT ROUTES
+// ==========================================
 
-// Mentor Import (Excel Upload)
+router.use("/students", studentImportRoutes);
 router.use("/mentor-import", mentorImportRoutes);
 
-// Mentor CRUD / List
+// ==========================================
+// MENTOR MANAGEMENT ROUTES
+// ==========================================
+
 router.use("/mentors", mentorRoutes);
 
-router.use("/mapping", mappingRoutes);
+// ==========================================
+// MAPPING & GROUP ROUTES
+// ==========================================
 
+router.use("/mapping", mappingRoutes);
 router.use("/groups", groupRoutes);
+
+// ==========================================
+// TEST ROUTES
+// ==========================================
 
 router.use("/test", testRoutes);
 
-// ============================================================================
-// Export Router
-// ============================================================================
+// ==========================================
+// EXPORT ROUTER
+// ==========================================
 
 module.exports = router;

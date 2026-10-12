@@ -1,109 +1,149 @@
 "use strict";
 
-const {
-  findAdminByEmail,
-  createAdmin,
-} = require("../repositories/admin.repository");
+const crypto = require("crypto");
+
+const { createAdmin } = require("../repositories/admin.repository");
 
 const { createOTP, deleteOTP } = require("../repositories/auth.repository");
 
-const { sendEmail, generateOtpTemplate } = require("../utils/email");
+const {
+  findAccountByEmail,
+  normalizeEmail,
+} = require("../repositories/commonAuth.repository");
+
+const {
+  sendEmail,
+  generateAccountActivationTemplate,
+} = require("../utils/email");
+
+const AppError = require("../../../utils/AppError");
 
 // ==========================================
-// GENERATE OTP
+// GENERATE SECURE OTP
 // ==========================================
 
-const generateOTP = () => {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-};
+const generateOTP = () => crypto.randomInt(100000, 1000000).toString();
 
 // ==========================================
 // ADMIN REGISTER SERVICE
 // ==========================================
 
-const adminRegisterService = async (payload) => {
-  const { name, email, password } = payload;
+const adminRegisterService = async (payload = {}, actor = null) => {
+  // ========================================
+  // AUTHORIZATION
+  // ========================================
 
-  // ==========================================
-  // REQUIRED FIELDS
-  // ==========================================
-
-  if (!name || !email || !password) {
-    throw new Error("All fields are required.");
+  if (!actor || actor.accountType !== "ADMIN" || actor.role !== "ADMIN") {
+    throw new AppError(
+      "Only an authorized Admin can create Admin accounts.",
+      403,
+    );
   }
 
-  // ==========================================
-  // EMAIL DOMAIN VALIDATION
-  // ==========================================
+  // ========================================
+  // INPUT
+  // ========================================
+
+  const name = String(payload.name || "").trim();
+
+  const email = normalizeEmail(payload.email);
+
+  if (!name || !email) {
+    throw new AppError("Name and email are required.", 400);
+  }
+
+  // ========================================
+  // EMAIL DOMAIN
+  // ========================================
 
   const allowedDomains = ["@s.amity.edu", "@gwa.amity.edu"];
 
-  const isValid = allowedDomains.some((domain) =>
-    email.toLowerCase().endsWith(domain),
+  const isAllowedDomain = allowedDomains.some((domain) =>
+    email.endsWith(domain),
   );
 
-  if (!isValid) {
-    throw new Error("Only Amity admin email is allowed.");
+  if (!isAllowedDomain) {
+    throw new AppError("Only authorized Amity email domains are allowed.", 400);
   }
 
-  // ==========================================
-  // CHECK EXISTING ADMIN
-  // ==========================================
+  // ========================================
+  // DUPLICATE EMAIL CHECK
+  // ========================================
 
-  const existing = await findAdminByEmail(email);
+  const existingAccount = await findAccountByEmail(email);
 
-  if (existing) {
-    throw new Error("Admin already exists.");
+  if (existingAccount) {
+    throw new AppError("An account already exists with this email.", 409);
   }
 
-  // ==========================================
-  // CREATE ADMIN
-  // ==========================================
+  // ========================================
+  // CREATE PENDING ADMIN
+  // ========================================
+
+  // Admin schema currently requires a
+  // password. Generate a random secret
+  // which is NOT sent to the user.
+  //
+  // After OTP verification, the activation
+  // service will establish the first-login
+  // credential.
+
+  const pendingPassword = crypto.randomBytes(32).toString("base64url");
 
   const admin = await createAdmin({
     name,
     email,
-    password,
+    password: pendingPassword,
+    role: "ADMIN",
+    roles: ["ADMIN"],
+    isVerified: false,
+    isActive: true,
   });
 
-  // ==========================================
-  // DELETE OLD OTP
-  // ==========================================
-
-  await deleteOTP(email, "EMAIL_VERIFICATION");
-
-  // ==========================================
-  // GENERATE OTP
-  // ==========================================
+  // ========================================
+  // CREATE ACTIVATION OTP
+  // ========================================
 
   const otp = generateOTP();
 
-  await createOTP({
-    email,
-    otp,
-    purpose: "EMAIL_VERIFICATION",
-  });
+  try {
+    await deleteOTP(email, "ACCOUNT_ACTIVATION");
 
-  // ==========================================
-  // SEND EMAIL
-  // ==========================================
-
-  await sendEmail({
-    to: email,
-    subject: "Admin Email Verification",
-    html: generateOtpTemplate({
-      name,
+    await createOTP({
+      email,
+      accountType: "ADMIN",
       otp,
-    }),
-  });
+      purpose: "ACCOUNT_ACTIVATION",
+    });
 
-  // ==========================================
+    // ======================================
+    // SEND OTP EMAIL
+    // ======================================
+
+    await sendEmail({
+      to: email,
+      subject: "Activate Your AMIOUT Admin Account",
+      html: generateAccountActivationTemplate({
+        name,
+        otp,
+        role: "ADMIN",
+      }),
+    });
+  } catch (error) {
+    // The account remains unverified.
+    // A resend/recovery flow must handle
+    // incomplete provisioning.
+
+    throw error;
+  }
+
+  // ========================================
   // RESPONSE
-  // ==========================================
+  // ========================================
 
   return {
     success: true,
-    message: "OTP sent successfully. Please verify your email.",
+    message: "Admin account created. Activation OTP sent to registered email.",
     adminId: admin._id,
   };
 };

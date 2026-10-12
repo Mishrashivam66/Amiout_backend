@@ -1,4 +1,7 @@
+"use strict";
+
 const express = require("express");
+
 const router = express.Router();
 
 // ==========================================
@@ -8,8 +11,14 @@ const router = express.Router();
 const {
   register,
   login,
+
   verifyOtp,
   resendOtp,
+
+  // ACCOUNT ACTIVATION
+  requestActivationOtp,
+  verifyActivationOtp,
+  resendActivationOtp,
 
   forgotPassword,
   verifyResetOtp,
@@ -19,6 +28,7 @@ const {
   changePassword,
   refreshToken,
   logout,
+
   getProfile,
   updateProfile,
 } = require("../controllers/auth.controller");
@@ -45,62 +55,104 @@ const {
 } = require("../validators");
 
 // ==========================================
-// MIDDLEWARES
+// AUTHENTICATION MIDDLEWARE
 // ==========================================
 
-const { protect } = require("../../../middlewares/auth.middleware");
+const {
+  protect,
+  requireRoles,
+  requirePasswordSetupComplete,
+} = require("../../../middlewares/auth.middleware");
 
 // ==========================================
-// AUTH ROUTES
+// PUBLIC AUTHENTICATION ROUTES
 // ==========================================
 
-// Register
+// Common login for all eight roles:
+//
+// STUDENT
+// MENTOR
+// COORDINATOR
+// HOD
+// HOI
+// ADMIN
+// SECURITY
+// SUPER_ADMIN
+
+router.post("/login", validate(loginSchema), login);
+router.post("/activation/request-otp", requestActivationOtp);
+
+router.post("/activation/verify-otp", verifyActivationOtp);
+
+router.post("/activation/resend-otp", resendActivationOtp);
+
+// ==========================================
+// STUDENT REGISTRATION
+// ==========================================
+
+// Registration service must enforce
+// STUDENT-only registration.
+//
+// Other account types should be
+// provisioned by authorized staff.
+
 router.post("/register", validate(registerSchema), register);
 
-// Login
-router.post("/login", validate(loginSchema), login);
-
 // ==========================================
-// EMAIL VERIFICATION OTP
+// EMAIL VERIFICATION
 // ==========================================
 
-// Verify OTP
 router.post("/verify-otp", validate(verifyOtpSchema), verifyOtp);
 
-// Resend OTP
 router.post("/resend-otp", validate(resendOtpSchema), resendOtp);
 
 // ==========================================
-// FORGOT PASSWORD
+// PASSWORD RECOVERY
 // ==========================================
 
-// Send Reset OTP
 router.post("/forgot-password", validate(forgotPasswordSchema), forgotPassword);
 
-// Verify Reset OTP
 router.post("/verify-reset-otp", validate(verifyOtpSchema), verifyResetOtp);
 
-// Resend Reset OTP
 router.post("/resend-reset-otp", validate(resendOtpSchema), resendResetOtp);
 
-// Reset Password
 router.post("/reset-password", validate(resetPasswordSchema), resetPassword);
 
 // ==========================================
-// TOKEN
+// REFRESH ACCESS TOKEN
 // ==========================================
 
-// Refresh Token
+// Reads the HttpOnly refresh cookie.
+// Does not require a Bearer access token.
+//
+// Refresh service validates:
+// - JWT signature
+// - Database session
+// - Account status
+// - Current authorized roles
+// - Password change invalidation
+
 router.post("/refresh-token", refreshToken);
 
 // ==========================================
-// AUTHENTICATED ROUTES
+// LOGOUT
 // ==========================================
 
-// Logout
+// Allow logout even when
+// mustChangePassword === true.
+
 router.post("/logout", protect, logout);
 
-// Change Password
+// ==========================================
+// MANDATORY FIRST-LOGIN PASSWORD CHANGE
+// ==========================================
+
+// Must remain accessible before
+// temporary password setup is complete.
+//
+// SUPER_ADMIN may also change
+// its own password.
+
 router.put(
   "/change-password",
   protect,
@@ -108,11 +160,47 @@ router.put(
   changePassword,
 );
 
-// Get Profile
+// ==========================================
+// GET CURRENT USER PROFILE
+// ==========================================
+
+// Accessible during first login.
+//
+// Frontend uses this endpoint to restore:
+// - id
+// - accountType
+// - role
+// - roles
+// - mustChangePassword
+
 router.get("/me", protect, getProfile);
 
-// Update Profile
-router.put("/profile", protect, validate(updateProfileSchema), updateProfile);
+// ==========================================
+// UPDATE CURRENT USER PROFILE
+// ==========================================
+
+// Mandatory password setup must be
+// completed before profile updates.
+//
+// SUPER_ADMIN is excluded because
+// its account is read-only.
+
+router.put(
+  "/profile",
+  protect,
+  requirePasswordSetupComplete,
+  requireRoles(
+    "STUDENT",
+    "MENTOR",
+    "COORDINATOR",
+    "HOD",
+    "HOI",
+    "ADMIN",
+    "SECURITY",
+  ),
+  validate(updateProfileSchema),
+  updateProfile,
+);
 
 // ==========================================
 // EXPORT

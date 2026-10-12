@@ -1,68 +1,114 @@
+"use strict";
+
+// ==========================================
+// COMMON PROFILE SERVICES
+// ==========================================
+
 const {
   getProfileService,
   updateProfileService,
 } = require("./profile.service");
+
+// ==========================================
+// MENTOR PROFILE SERVICES
+// ==========================================
+
 const {
   getMentorProfileService,
   updateMentorProfileService,
 } = require("./mentorProfile.service");
+
+// ==========================================
+// ADMIN PROFILE SERVICES
+// ==========================================
 
 const {
   getAdminProfileService,
   updateAdminProfileService,
 } = require("./adminProfile.service");
 
+// ==========================================
+// SERVICE EXPORTS
+// ==========================================
+// ==========================================
+// ACCOUNT ACTIVATION
+// ==========================================
+
+const {
+  requestActivationOtpService,
+  verifyActivationOtpService,
+  resendActivationOtpService,
+} = require("./activation.service");
 module.exports = {
+  // ========================================
+  // COMMON AUTHENTICATION
+  // ========================================
+
   registerService: require("./register.service"),
   loginService: require("./login.service"),
 
-  // ==========================================
+  // ========================================
   // EMAIL VERIFICATION
-  // ==========================================
+  // ========================================
 
   verifyOtpService: require("./verifyOtp.service"),
   resendOtpService: require("./resendOtp.service"),
 
   // ==========================================
-  // FORGOT PASSWORD
+  // ACCOUNT ACTIVATION
   // ==========================================
+
+  requestActivationOtpService,
+  verifyActivationOtpService,
+  resendActivationOtpService,
+  // ========================================
+  // PASSWORD RECOVERY
+  // ========================================
 
   forgotPasswordService: require("./forgotPassword.service"),
   verifyResetOtpService: require("./verifyResetOtp.service"),
   resendResetOtpService: require("./resendResetOtp.service"),
   resetPasswordService: require("./resetPassword.service"),
 
-  // Mentor Profile
-  getMentorProfileService,
-  updateMentorProfileService,
-  // ==========================================
-  // PROFILE
-  // ==========================================
+  // ========================================
+  // COMMON PROFILE
+  // ========================================
 
   getProfileService,
   updateProfileService,
 
-  // ==========================================
-  // TOKEN
-  // ==========================================
+  // ========================================
+  // COMMON SESSION MANAGEMENT
+  // ========================================
 
   refreshTokenService: require("./refreshToken.service"),
   logoutService: require("./logout.service"),
 
-  // ==========================================
-  // PASSWORD
-  // ==========================================
+  // ========================================
+  // PASSWORD MANAGEMENT
+  // ========================================
 
   changePasswordService: require("./changePassword.service"),
 
-  // ==========================================
-  // ADMIN
-  // ==========================================
+  // ========================================
+  // LEGACY MENTOR PROFILE
+  // ========================================
+
+  getMentorProfileService,
+  updateMentorProfileService,
+
+  // ========================================
+  // LEGACY ADMIN AUTHENTICATION
+  // ========================================
 
   adminRegisterService: require("./adminRegister.service"),
   adminLoginService: require("./adminLogin.service"),
   adminVerifyOtpService: require("./adminVerifyOtp.service"),
   adminResendOtpService: require("./adminResendOtp.service"),
+
+  // ========================================
+  // LEGACY ADMIN PROFILE
+  // ========================================
 
   getAdminProfileService,
   updateAdminProfileService,

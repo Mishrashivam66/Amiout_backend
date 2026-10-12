@@ -1,72 +1,146 @@
 "use strict";
 
-const { deleteOTP, createOTP } = require("../repositories/auth.repository");
+const crypto = require("crypto");
+
+const {
+  findOTP,
+  deleteOTP,
+  createOTP,
+} = require("../repositories/auth.repository");
 
 const { findAdminByEmail } = require("../repositories/admin.repository");
 
-const { sendEmail, generateOtpTemplate } = require("../utils/email");
+const { normalizeEmail } = require("../repositories/commonAuth.repository");
+
+const {
+  sendEmail,
+  generateAccountActivationTemplate,
+} = require("../utils/email");
+
+const AppError = require("../../../utils/AppError");
 
 // ==========================================
-// GENERATE OTP
+// CONFIGURATION
 // ==========================================
 
-const generateOTP = () => {
-  return Math.floor(100000 + Math.random() * 900000).toString();
-};
+const OTP_PURPOSE = "ACCOUNT_ACTIVATION";
+
+const RESEND_COOLDOWN_SECONDS = 60;
 
 // ==========================================
-// RESEND OTP
+// GENERATE SECURE OTP
 // ==========================================
 
-const adminResendOtpService = async (email, purpose = "EMAIL_VERIFICATION") => {
-  // ==========================================
-  // FIND ADMIN
-  // ==========================================
+const generateOTP = () => crypto.randomInt(100000, 1000000).toString();
 
-  const admin = await findAdminByEmail(email);
+// ==========================================
+// RESEND ADMIN ACTIVATION OTP
+// ==========================================
 
-  if (!admin) {
-    throw new Error("Admin not found.");
+const adminResendOtpService = async (email) => {
+  // ========================================
+  // NORMALIZE EMAIL
+  // ========================================
+
+  const normalizedEmail = normalizeEmail(email);
+
+  if (!normalizedEmail) {
+    throw new AppError("Email is required.", 400);
   }
 
-  // ==========================================
-  // DELETE OLD OTP
-  // ==========================================
+  // ========================================
+  // FIND ADMIN
+  // ========================================
 
-  await deleteOTP(email, purpose);
+  const admin = await findAdminByEmail(normalizedEmail);
 
-  // ==========================================
-  // GENERATE OTP
-  // ==========================================
+  if (!admin) {
+    throw new AppError("Admin account not found.", 404);
+  }
+
+  // ========================================
+  // CHECK ACCOUNT STATUS
+  // ========================================
+
+  if (admin.isVerified) {
+    throw new AppError("This Admin account is already activated.", 409);
+  }
+
+  if (admin.isActive === false) {
+    throw new AppError("This Admin account is disabled.", 403);
+  }
+
+  // ========================================
+  // CHECK EXISTING OTP
+  // ========================================
+
+  const existingOtp = await findOTP(normalizedEmail, OTP_PURPOSE);
+
+  if (existingOtp) {
+    if (existingOtp.accountType && existingOtp.accountType !== "ADMIN") {
+      throw new AppError("Invalid activation request.", 400);
+    }
+
+    const createdAt = new Date(existingOtp.createdAt).getTime();
+
+    const elapsedSeconds = (Date.now() - createdAt) / 1000;
+
+    if (
+      Number.isFinite(elapsedSeconds) &&
+      elapsedSeconds >= 0 &&
+      elapsedSeconds < RESEND_COOLDOWN_SECONDS
+    ) {
+      const remainingSeconds = Math.ceil(
+        RESEND_COOLDOWN_SECONDS - elapsedSeconds,
+      );
+
+      throw new AppError(
+        `Please wait ${remainingSeconds} seconds before requesting another OTP.`,
+        429,
+      );
+    }
+  }
+
+  // ========================================
+  // GENERATE NEW OTP
+  // ========================================
 
   const otp = generateOTP();
 
+  // ========================================
+  // REPLACE PREVIOUS OTP
+  // ========================================
+
+  await deleteOTP(normalizedEmail, OTP_PURPOSE);
+
   await createOTP({
-    email,
+    email: normalizedEmail,
+    accountType: "ADMIN",
     otp,
-    purpose,
+    purpose: OTP_PURPOSE,
   });
 
-  // ==========================================
-  // SEND EMAIL
-  // ==========================================
+  // ========================================
+  // SEND ACTIVATION EMAIL
+  // ========================================
 
   await sendEmail({
     to: admin.email,
-    subject: "Verify Your Email",
-    html: generateOtpTemplate({
+    subject: "AMIOUT Admin Account Activation OTP",
+    html: generateAccountActivationTemplate({
       name: admin.name,
       otp,
+      role: "ADMIN",
     }),
   });
 
-  // ==========================================
+  // ========================================
   // RESPONSE
-  // ==========================================
+  // ========================================
 
   return {
     success: true,
-    message: "OTP sent successfully.",
+    message: "A new activation OTP has been sent to your registered email.",
   };
 };
 

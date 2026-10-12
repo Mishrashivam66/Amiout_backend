@@ -4,11 +4,24 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 
-const { ROLES, AUTH_CONSTANTS } = require("../constants");
+const { AUTH_CONSTANTS } = require("../constants");
+
+// ==========================================
+// ADMIN ROLES
+// ==========================================
+
+const ADMIN_ROLES = Object.freeze(["ADMIN", "SUPER_ADMIN"]);
+
+// ==========================================
+// ADMIN SCHEMA
+// ==========================================
 
 const adminSchema = new mongoose.Schema(
   {
-    // Basic Information
+    // ======================================
+    // BASIC INFORMATION
+    // ======================================
+
     name: {
       type: String,
       required: true,
@@ -36,7 +49,10 @@ const adminSchema = new mongoose.Schema(
       trim: true,
     },
 
-    // Authentication
+    // ======================================
+    // AUTHENTICATION
+    // ======================================
+
     password: {
       type: String,
       required: true,
@@ -46,14 +62,28 @@ const adminSchema = new mongoose.Schema(
 
     role: {
       type: String,
-      enum: [ROLES.ADMIN],
-      default: ROLES.ADMIN,
+      enum: ADMIN_ROLES,
+      default: "ADMIN",
+      required: true,
     },
 
-    // Account Status
+    roles: {
+      type: [
+        {
+          type: String,
+          enum: ADMIN_ROLES,
+        },
+      ],
+      default: undefined,
+    },
+
+    // ======================================
+    // ACCOUNT STATUS
+    // ======================================
+
     isVerified: {
       type: Boolean,
-      default: true,
+      default: false,
     },
 
     isActive: {
@@ -61,12 +91,27 @@ const adminSchema = new mongoose.Schema(
       default: true,
     },
 
+    // ======================================
+    // FIRST LOGIN PASSWORD CHANGE
+    // ======================================
+
+    mustChangePassword: {
+      type: Boolean,
+      default: false,
+    },
+
     lastLogin: {
       type: Date,
       default: null,
     },
 
-    // Security
+    // ======================================
+    // SECURITY
+    // ======================================
+
+    // Legacy compatibility field.
+    // New sessions use RefreshToken model.
+
     refreshToken: {
       type: String,
       default: null,
@@ -78,7 +123,10 @@ const adminSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Password Reset
+    // ======================================
+    // PASSWORD RESET
+    // ======================================
+
     resetPasswordToken: {
       type: String,
       default: null,
@@ -96,20 +144,49 @@ const adminSchema = new mongoose.Schema(
   },
 );
 
-// Hash Password
-adminSchema.pre("save", async function () {
-  if (!this.isModified("password")) return;
+// ==========================================
+// KEEP ADMIN ROLES CONSISTENT
+// ==========================================
 
-  const salt = await bcrypt.genSalt(10);
-  this.password = await bcrypt.hash(this.password, salt);
+// ADMIN and SUPER_ADMIN must remain
+// separate privileges.
+
+adminSchema.pre("validate", function () {
+  this.roles = [this.role];
 });
 
-// Match Password
+// ==========================================
+// HASH PASSWORD
+// ==========================================
+
+adminSchema.pre("save", async function () {
+  if (!this.isModified("password")) {
+    return;
+  }
+
+  const salt = await bcrypt.genSalt(10);
+
+  this.password = await bcrypt.hash(this.password, salt);
+
+  this.passwordChangedAt = new Date();
+});
+
+// ==========================================
+// MATCH PASSWORD
+// ==========================================
+
 adminSchema.methods.matchPassword = async function (enteredPassword) {
+  if (!this.password) {
+    return false;
+  }
+
   return bcrypt.compare(enteredPassword, this.password);
 };
 
-// Generate Password Reset Token
+// ==========================================
+// GENERATE PASSWORD RESET TOKEN
+// ==========================================
+
 adminSchema.methods.generatePasswordResetToken = function () {
   const resetToken = crypto.randomBytes(32).toString("hex");
 
@@ -125,4 +202,8 @@ adminSchema.methods.generatePasswordResetToken = function () {
   return resetToken;
 };
 
-module.exports = mongoose.model("Admin", adminSchema);
+// ==========================================
+// EXPORT MODEL
+// ==========================================
+
+module.exports = mongoose.models.Admin || mongoose.model("Admin", adminSchema);

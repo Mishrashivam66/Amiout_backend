@@ -1,9 +1,16 @@
+"use strict";
+
 const {
   registerService,
   loginService,
 
   verifyOtpService,
   resendOtpService,
+
+  // ACCOUNT ACTIVATION
+  requestActivationOtpService,
+  verifyActivationOtpService,
+  resendActivationOtpService,
 
   forgotPasswordService,
   verifyResetOtpService,
@@ -18,6 +25,21 @@ const {
 } = require("../services");
 
 // ==========================================
+// REFRESH TOKEN COOKIE CONFIG
+// ==========================================
+
+const getRefreshCookieOptions = () => ({
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+  path: "/",
+});
+
+const clearRefreshCookie = (res) => {
+  res.clearCookie("refreshToken", getRefreshCookieOptions());
+};
+
+// ==========================================
 // REGISTER
 // ==========================================
 
@@ -27,9 +49,6 @@ const register = async (req, res, next) => {
 
     return res.status(201).json(result);
   } catch (error) {
-    console.error("REGISTER ERROR >>>", error);
-    console.error(error.stack);
-
     next(error);
   }
 };
@@ -41,30 +60,46 @@ const register = async (req, res, next) => {
 const login = async (req, res, next) => {
   try {
     const deviceInfo = {
-      device: req.headers["user-agent"],
+      device: req.headers["user-agent"] || "",
+
       browser: req.headers["sec-ch-ua"] || "",
+
       operatingSystem: req.headers["sec-ch-ua-platform"] || "",
-      ipAddress: req.ip,
+
+      ipAddress: req.ip || "",
     };
 
     const result = await loginService(
-      req.body.email,
-      req.body.password,
+      req.body?.email,
+      req.body?.password,
       deviceInfo,
     );
 
     res.cookie("refreshToken", result.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
+      ...getRefreshCookieOptions(),
       maxAge: 30 * 24 * 60 * 60 * 1000,
     });
+
+    const mustChangePassword =
+      result.mustChangePassword === true ||
+      result.user?.mustChangePassword === true;
 
     return res.status(200).json({
       success: result.success,
       message: result.message,
+
       accessToken: result.accessToken,
-      user: result.user,
+
+      user: {
+        ...result.user,
+        mustChangePassword,
+      },
+
+      mustChangePassword,
+
+      nextAction: mustChangePassword
+        ? "CHANGE_PASSWORD"
+        : result.nextAction || null,
     });
   } catch (error) {
     next(error);
@@ -72,12 +107,22 @@ const login = async (req, res, next) => {
 };
 
 // ==========================================
-// VERIFY OTP
+// EMAIL VERIFICATION OTP
 // ==========================================
 
 const verifyOtp = async (req, res, next) => {
   try {
-    const result = await verifyOtpService(req.body.email, req.body.otp);
+    const result = await verifyOtpService(req.body?.email, req.body?.otp);
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const resendOtp = async (req, res, next) => {
+  try {
+    const result = await resendOtpService(req.body?.email);
 
     return res.status(200).json(result);
   } catch (error) {
@@ -86,12 +131,43 @@ const verifyOtp = async (req, res, next) => {
 };
 
 // ==========================================
-// RESEND OTP
+// ACCOUNT ACTIVATION - REQUEST OTP
 // ==========================================
 
-const resendOtp = async (req, res, next) => {
+const requestActivationOtp = async (req, res, next) => {
   try {
-    const result = await resendOtpService(req.body.email);
+    const result = await requestActivationOtpService(req.body?.email);
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ==========================================
+// ACCOUNT ACTIVATION - VERIFY OTP
+// ==========================================
+
+const verifyActivationOtp = async (req, res, next) => {
+  try {
+    const result = await verifyActivationOtpService(
+      req.body?.email,
+      req.body?.otp,
+    );
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ==========================================
+// ACCOUNT ACTIVATION - RESEND OTP
+// ==========================================
+
+const resendActivationOtp = async (req, res, next) => {
+  try {
+    const result = await resendActivationOtpService(req.body?.email);
 
     return res.status(200).json(result);
   } catch (error) {
@@ -105,20 +181,21 @@ const resendOtp = async (req, res, next) => {
 
 const forgotPassword = async (req, res, next) => {
   try {
-    const result = await forgotPasswordService(req.body.email);
+    const result = await forgotPasswordService(req.body?.email);
 
     return res.status(200).json(result);
   } catch (error) {
     next(error);
   }
 };
+
 // ==========================================
 // VERIFY RESET OTP
 // ==========================================
 
 const verifyResetOtp = async (req, res, next) => {
   try {
-    const result = await verifyResetOtpService(req.body.email, req.body.otp);
+    const result = await verifyResetOtpService(req.body?.email, req.body?.otp);
 
     return res.status(200).json(result);
   } catch (error) {
@@ -132,13 +209,14 @@ const verifyResetOtp = async (req, res, next) => {
 
 const resendResetOtp = async (req, res, next) => {
   try {
-    const result = await resendResetOtpService(req.body.email);
+    const result = await resendResetOtpService(req.body?.email);
 
     return res.status(200).json(result);
   } catch (error) {
     next(error);
   }
 };
+
 // ==========================================
 // RESET PASSWORD
 // ==========================================
@@ -146,8 +224,8 @@ const resendResetOtp = async (req, res, next) => {
 const resetPassword = async (req, res, next) => {
   try {
     const result = await resetPasswordService(
-      req.body.email,
-      req.body.password,
+      req.body?.email,
+      req.body?.password,
     );
 
     return res.status(200).json(result);
@@ -162,13 +240,26 @@ const resetPassword = async (req, res, next) => {
 
 const changePassword = async (req, res, next) => {
   try {
+    if (!req.auth) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
     const result = await changePasswordService(
-      req.user.id,
-      req.body.oldPassword,
-      req.body.newPassword,
+      req.auth.id,
+      req.body?.oldPassword,
+      req.body?.newPassword,
+      req.auth.accountType,
     );
 
-    return res.status(200).json(result);
+    clearRefreshCookie(res);
+
+    return res.status(200).json({
+      ...result,
+      requireLogin: true,
+    });
   } catch (error) {
     next(error);
   }
@@ -180,7 +271,14 @@ const changePassword = async (req, res, next) => {
 
 const refreshToken = async (req, res, next) => {
   try {
-    const token = req.cookies.refreshToken;
+    const token = req.cookies?.refreshToken;
+
+    if (!token) {
+      return res.status(401).json({
+        success: false,
+        message: "Refresh token is required.",
+      });
+    }
 
     const result = await refreshTokenService(token);
 
@@ -196,11 +294,16 @@ const refreshToken = async (req, res, next) => {
 
 const logout = async (req, res, next) => {
   try {
-    const token = req.cookies.refreshToken;
+    const token = req.cookies?.refreshToken;
 
-    const result = await logoutService(token);
+    const result = token
+      ? await logoutService(token)
+      : {
+          success: true,
+          message: "Logged out successfully.",
+        };
 
-    res.clearCookie("refreshToken");
+    clearRefreshCookie(res);
 
     return res.status(200).json(result);
   } catch (error) {
@@ -214,7 +317,18 @@ const logout = async (req, res, next) => {
 
 const getProfile = async (req, res, next) => {
   try {
-    const result = await getProfileService(req.user.id);
+    if (!req.auth) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    const result = await getProfileService(
+      req.auth.id,
+      req.auth.accountType,
+      req.auth.activeRole || req.auth.role,
+    );
 
     return res.status(200).json(result);
   } catch (error) {
@@ -228,7 +342,26 @@ const getProfile = async (req, res, next) => {
 
 const updateProfile = async (req, res, next) => {
   try {
-    const result = await updateProfileService(req.user.id, req.body);
+    if (!req.auth) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    if (req.auth.role === "SUPER_ADMIN") {
+      return res.status(403).json({
+        success: false,
+        message: "Super Admin has read-only access.",
+      });
+    }
+
+    const result = await updateProfileService(
+      req.auth.id,
+      req.body,
+      req.auth.accountType,
+      req.auth.activeRole || req.auth.role,
+    );
 
     return res.status(200).json(result);
   } catch (error) {
@@ -236,12 +369,20 @@ const updateProfile = async (req, res, next) => {
   }
 };
 
+// ==========================================
+// EXPORTS
+// ==========================================
+
 module.exports = {
   register,
   login,
 
   verifyOtp,
   resendOtp,
+
+  requestActivationOtp,
+  verifyActivationOtp,
+  resendActivationOtp,
 
   forgotPassword,
   verifyResetOtp,

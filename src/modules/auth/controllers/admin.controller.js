@@ -1,9 +1,11 @@
 "use strict";
 
 const adminRegisterService = require("../services/adminRegister.service");
-const adminLoginService = require("../services/adminLogin.service");
+
+const loginService = require("../services/login.service");
 
 const adminVerifyOtpService = require("../services/adminVerifyOtp.service");
+
 const adminResendOtpService = require("../services/adminResendOtp.service");
 
 const {
@@ -17,21 +19,37 @@ const {
 
 const adminRegister = async (req, res, next) => {
   try {
-    const result = await adminRegisterService(req.body);
+    // Authenticated ADMIN actor is required.
+    // Service also enforces authorization.
+
+    const result = await adminRegisterService(req.body, req.auth);
 
     return res.status(201).json(result);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
 // ==========================================
-// ADMIN LOGIN
+// LEGACY ADMIN LOGIN
 // ==========================================
 
-const adminLogin = async (req, res) => {
+// Kept temporarily for compatibility.
+// Uses the common login service.
+
+const adminLogin = async (req, res, next) => {
   try {
-    const result = await adminLoginService(req.body.email, req.body.password);
+    const result = await loginService(req.body.email, req.body.password);
+
+    // Never allow a non-admin account
+    // through the legacy admin endpoint.
+
+    if (result.user?.accountType !== "ADMIN") {
+      return res.status(403).json({
+        success: false,
+        message: "This endpoint is only for Admin accounts.",
+      });
+    }
 
     res.cookie("refreshToken", result.refreshToken, {
       httpOnly: true,
@@ -47,19 +65,12 @@ const adminLogin = async (req, res) => {
       user: result.user,
     });
   } catch (error) {
-    console.error("========== ADMIN LOGIN ERROR ==========");
-    console.error(error);
-    console.error(error.stack);
-
-    return res.status(500).json({
-      success: false,
-      message: error.message,
-    });
+    return next(error);
   }
 };
 
 // ==========================================
-// VERIFY OTP
+// ADMIN VERIFY OTP
 // ==========================================
 
 const adminVerifyOtp = async (req, res, next) => {
@@ -68,12 +79,12 @@ const adminVerifyOtp = async (req, res, next) => {
 
     return res.status(200).json(result);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
 // ==========================================
-// RESEND OTP
+// ADMIN RESEND OTP
 // ==========================================
 
 const adminResendOtp = async (req, res, next) => {
@@ -82,12 +93,12 @@ const adminResendOtp = async (req, res, next) => {
 
     return res.status(200).json(result);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
 // ==========================================
-// GET PROFILE
+// GET ADMIN PROFILE
 // ==========================================
 
 const getAdminProfile = async (req, res, next) => {
@@ -96,26 +107,35 @@ const getAdminProfile = async (req, res, next) => {
 
     return res.status(200).json(result);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
 // ==========================================
-// UPDATE PROFILE
+// UPDATE ADMIN PROFILE
 // ==========================================
 
 const updateAdminProfile = async (req, res, next) => {
   try {
+    // SUPER_ADMIN remains read-only.
+
+    if (req.auth?.role === "SUPER_ADMIN") {
+      return res.status(403).json({
+        success: false,
+        message: "Super Admin has read-only access.",
+      });
+    }
+
     const result = await updateAdminProfileService(req.user._id, req.body);
 
     return res.status(200).json(result);
   } catch (error) {
-    next(error);
+    return next(error);
   }
 };
 
 // ==========================================
-// EXPORT
+// EXPORTS
 // ==========================================
 
 module.exports = Object.freeze({

@@ -1,53 +1,92 @@
+"use strict";
+
+const mongoose = require("mongoose");
+
 const User = require("../models/User");
 const Mentor = require("../models/Mentor");
 const OTP = require("../models/OTP");
 const RefreshToken = require("../models/RefreshToken");
 
+const {
+  ACCOUNT_MODELS,
+  normalizeEmail,
+  normalizeAccountType,
+  findAccountById: findCommonAccountById,
+} = require("./commonAuth.repository");
+
 // ==========================================
-// USER
+// USER - LEGACY FUNCTIONS
 // ==========================================
 
 const createUser = async (userData) => {
-  return await User.create(userData);
+  return User.create(userData);
 };
 
 const findUserById = async (id) => {
-  let user = await User.findById(id);
+  if (!mongoose.isValidObjectId(id)) {
+    return null;
+  }
 
-  if (user) return user;
+  const student = await User.findById(id);
 
-  return await Mentor.findById(id);
+  if (student) {
+    return student;
+  }
+
+  return Mentor.findById(id);
 };
 
 const findUserByEmail = async (email) => {
-  return await User.findOne({ email }).select("+password");
+  return User.findOne({
+    email: normalizeEmail(email),
+  }).select("+password");
 };
 
 const findVerifiedUserByEmail = async (email) => {
-  return await User.findOne({
-    email,
+  return User.findOne({
+    email: normalizeEmail(email),
     isVerified: true,
   }).select("+password");
 };
 
 const updateUser = async (id, data) => {
-  let user = await User.findById(id);
+  if (!mongoose.isValidObjectId(id)) {
+    return null;
+  }
 
-  if (user) {
-    return await User.findByIdAndUpdate(id, data, {
+  const student = await User.findById(id);
+
+  if (student) {
+    return User.findByIdAndUpdate(id, data, {
       new: true,
       runValidators: true,
     });
   }
 
-  return await Mentor.findByIdAndUpdate(id, data, {
+  return Mentor.findByIdAndUpdate(id, data, {
     new: true,
     runValidators: true,
   });
 };
 
 const saveUser = async (user) => {
-  return await user.save();
+  return user.save();
+};
+
+const findUserByEnrollment = async (enrollmentNo) => {
+  return User.findOne({ enrollmentNo });
+};
+
+const findUserByMobile = async (mobileNumber) => {
+  return User.findOne({ mobileNumber });
+};
+
+// ==========================================
+// COMMON ACCOUNT LOOKUP
+// ==========================================
+
+const findAccountById = async (id, accountType, includePassword = false) => {
+  return findCommonAccountById(id, accountType, includePassword);
 };
 
 // ==========================================
@@ -55,25 +94,29 @@ const saveUser = async (user) => {
 // ==========================================
 
 const createOTP = async (otpData) => {
-  return await OTP.create(otpData);
+  return OTP.create(otpData);
 };
 
 const findOTP = async (email, purpose) => {
-  return await OTP.findOne({
-    email,
+  return OTP.findOne({
+    email: normalizeEmail(email),
     purpose,
   }).select("+otp");
 };
 
 const deleteOTP = async (email, purpose) => {
-  return await OTP.deleteMany({
-    email,
+  return OTP.deleteMany({
+    email: normalizeEmail(email),
     purpose,
   });
 };
 
 const incrementOtpAttempts = async (id) => {
-  return await OTP.findByIdAndUpdate(
+  if (!mongoose.isValidObjectId(id)) {
+    return null;
+  }
+
+  return OTP.findByIdAndUpdate(
     id,
     {
       $inc: {
@@ -87,62 +130,161 @@ const incrementOtpAttempts = async (id) => {
 };
 
 // ==========================================
-// REFRESH TOKEN
+// REFRESH TOKEN - CREATE SESSION
 // ==========================================
 
 const saveRefreshToken = async (tokenData) => {
-  return await RefreshToken.create(tokenData);
+  if (
+    !tokenData ||
+    !mongoose.isValidObjectId(tokenData.user) ||
+    typeof tokenData.token !== "string" ||
+    !tokenData.token.trim()
+  ) {
+    throw new Error("Valid account ID and refresh token are required.");
+  }
+
+  const accountType = normalizeAccountType(tokenData.accountType || "STUDENT");
+
+  if (!ACCOUNT_MODELS[accountType]) {
+    throw new Error("Invalid session account type.");
+  }
+
+  const expiresAt = new Date(tokenData.expiresAt);
+
+  if (
+    !Number.isFinite(expiresAt.getTime()) ||
+    expiresAt.getTime() <= Date.now()
+  ) {
+    throw new Error("Invalid refresh token expiry.");
+  }
+
+  // New sessions must contain sessionId.
+  if (typeof tokenData.sessionId !== "string" || !tokenData.sessionId.trim()) {
+    throw new Error("Session ID is required.");
+  }
+
+  return RefreshToken.create({
+    ...tokenData,
+    accountType,
+    expiresAt,
+    isRevoked: false,
+  });
 };
 
+// ==========================================
+// REFRESH TOKEN - FIND SESSION
+// ==========================================
+
 const findRefreshToken = async (token) => {
-  return await RefreshToken.findOne({
+  if (typeof token !== "string" || !token.trim()) {
+    return null;
+  }
+
+  return RefreshToken.findOne({
     token,
     isRevoked: false,
+    expiresAt: {
+      $gt: new Date(),
+    },
   }).select("+token");
 };
 
+// ==========================================
+// REFRESH TOKEN - REVOKE SESSION
+// ==========================================
+
 const revokeRefreshToken = async (token) => {
-  return await RefreshToken.findOneAndUpdate(
+  if (typeof token !== "string" || !token.trim()) {
+    return null;
+  }
+
+  return RefreshToken.findOneAndUpdate(
     {
       token,
+      isRevoked: false,
     },
     {
-      isRevoked: true,
+      $set: {
+        isRevoked: true,
+        revokedAt: new Date(),
+      },
+    },
+    {
+      new: true,
     },
   );
 };
 
-const revokeAllUserTokens = async (userId) => {
-  return await RefreshToken.updateMany(
+// ==========================================
+// REFRESH TOKEN - REVOKE ALL SESSIONS
+// ==========================================
+
+const revokeAllUserTokens = async (userId, accountType = "STUDENT") => {
+  if (!mongoose.isValidObjectId(userId)) {
+    return null;
+  }
+
+  const type = normalizeAccountType(accountType);
+
+  if (!ACCOUNT_MODELS[type]) {
+    throw new Error("Invalid account type.");
+  }
+
+  return RefreshToken.updateMany(
     {
       user: userId,
+      accountType: type,
+      isRevoked: false,
     },
     {
-      isRevoked: true,
+      $set: {
+        isRevoked: true,
+        revokedAt: new Date(),
+      },
     },
   );
 };
-const findUserByEnrollment = async (enrollmentNo) => {
-  return await User.findOne({ enrollmentNo });
+
+// ==========================================
+// REFRESH TOKEN - ACTIVE SESSIONS
+// ==========================================
+
+const findActiveSessions = async (userId, accountType) => {
+  const type = normalizeAccountType(accountType);
+
+  if (!mongoose.isValidObjectId(userId) || !ACCOUNT_MODELS[type]) {
+    return [];
+  }
+
+  return RefreshToken.find({
+    user: userId,
+    accountType: type,
+    isRevoked: false,
+    expiresAt: {
+      $gt: new Date(),
+    },
+  })
+    .select("-token -tokenHash")
+    .sort({ createdAt: -1 });
 };
 
-const findUserByMobile = async (mobileNumber) => {
-  return await User.findOne({ mobileNumber });
-};
 // ==========================================
 // EXPORTS
 // ==========================================
 
 module.exports = {
-  // User
+  // Existing user functions
   createUser,
   findUserById,
   findUserByEmail,
+  findVerifiedUserByEmail,
   findUserByEnrollment,
   findUserByMobile,
-  findVerifiedUserByEmail,
   updateUser,
   saveUser,
+
+  // Common account
+  findAccountById,
 
   // OTP
   createOTP,
@@ -150,9 +292,10 @@ module.exports = {
   deleteOTP,
   incrementOtpAttempts,
 
-  // Refresh Token
+  // Sessions
   saveRefreshToken,
   findRefreshToken,
   revokeRefreshToken,
   revokeAllUserTokens,
+  findActiveSessions,
 };

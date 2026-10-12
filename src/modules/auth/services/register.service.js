@@ -1,62 +1,85 @@
+"use strict";
+
+const crypto = require("crypto");
+
 const {
-  findUserByEmail,
   findUserByEnrollment,
   findUserByMobile,
   createUser,
   createOTP,
   deleteOTP,
 } = require("../repositories/auth.repository");
-const User = require("../models/User");
+
+const {
+  findAccountByEmail,
+  normalizeEmail,
+} = require("../repositories/commonAuth.repository");
 
 const AppError = require("../../../utils/AppError");
+
 const StudentProfile = require("../../student/models/StudentProfile");
+
 const { sendEmail, generateOtpTemplate } = require("../utils/email");
 
 const { AUTH_MESSAGES } = require("../constants");
 
 // ==========================================
-// GENERATE OTP
+// GENERATE SECURE OTP
 // ==========================================
 
 const generateOTP = () => {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return crypto.randomInt(100000, 1000000).toString();
 };
 
 // ==========================================
-// REGISTER SERVICE
+// REGISTER STUDENT
 // ==========================================
 
-const registerService = async (payload) => {
+const registerService = async (payload = {}) => {
   const {
     name,
     email,
     enrollmentNo,
     mobileNumber,
-
     course,
     branch,
     semester,
-
     password,
   } = payload;
 
-  // ==========================================
-  // CHECK EXISTING USER
-  // ==========================================
+  // ========================================
+  // NORMALIZE EMAIL
+  // ========================================
 
-  existingUser = await findUserByEmail(email);
+  const normalizedEmail = normalizeEmail(email);
 
-  if (existingUser) {
-    throw new AppError("User already exists with this email.", 409);
+  if (!normalizedEmail) {
+    throw new AppError("Email is required.", 400);
   }
-  // ==========================================
+
+  // ========================================
+  // CHECK EMAIL ACROSS ALL ACCOUNT MODELS
+  // ========================================
+
+  const existingAccount = await findAccountByEmail(normalizedEmail);
+
+  if (existingAccount) {
+    throw new AppError("An account already exists with this email.", 409);
+  }
+
+  // ========================================
   // CHECK DUPLICATE ENROLLMENT
-  // ==========================================
+  // ========================================
+
   const existingEnrollment = await findUserByEnrollment(enrollmentNo);
 
   if (existingEnrollment) {
     throw new AppError("Enrollment number already exists.", 409);
   }
+
+  // ========================================
+  // CHECK DUPLICATE MOBILE
+  // ========================================
 
   const existingMobile = await findUserByMobile(mobileNumber);
 
@@ -64,80 +87,84 @@ const registerService = async (payload) => {
     throw new AppError("Mobile number already exists.", 409);
   }
 
-  // ==========================================
-  // CREATE USER
-  // ==========================================
+  // ========================================
+  // CREATE STUDENT ACCOUNT
+  // ========================================
+
+  // Only explicitly allowed student fields
+  // are forwarded. Public registration
+  // cannot assign ADMIN or faculty roles.
 
   const user = await createUser({
     name,
-
-    email,
-
+    email: normalizedEmail,
     enrollmentNo,
-
     mobileNumber,
-
     course,
-
     branch,
-
     semester,
-
     password,
+    role: "STUDENT",
   });
 
-  if (user.role === "STUDENT") {
-    await StudentProfile.create({
-      user: user._id,
-    });
-  }
+  // ========================================
+  // CREATE STUDENT PROFILE
+  // ========================================
 
-  // ==========================================
-  // REMOVE OLD OTP
-  // ==========================================
+  await StudentProfile.create({
+    user: user._id,
+  });
 
-  await deleteOTP(email, "EMAIL_VERIFICATION");
+  // ========================================
+  // REMOVE PREVIOUS VERIFICATION OTP
+  // ========================================
 
-  // ==========================================
-  // GENERATE NEW OTP
-  // ==========================================
+  await deleteOTP(normalizedEmail, "EMAIL_VERIFICATION");
+
+  // ========================================
+  // GENERATE OTP
+  // ========================================
 
   const otp = generateOTP();
 
+  // ========================================
+  // SAVE OTP
+  // ========================================
+
   await createOTP({
-    email,
-
+    email: normalizedEmail,
+    accountType: "STUDENT",
     otp,
-
     purpose: "EMAIL_VERIFICATION",
   });
 
-  // ==========================================
-  // SEND EMAIL
-  // ==========================================
+  // ========================================
+  // SEND VERIFICATION EMAIL
+  // ========================================
 
   await sendEmail({
-    to: email,
-
-    subject: "Verify Your Email",
-
+    to: normalizedEmail,
+    subject: "Verify Your AMIOUT Email",
     html: generateOtpTemplate({
-      name,
+      name: user.name,
       otp,
+      purpose: "EMAIL_VERIFICATION",
     }),
   });
 
-  // ==========================================
+  // ========================================
   // RESPONSE
-  // ==========================================
+  // ========================================
 
   return {
     success: true,
-
     message: AUTH_MESSAGES.REGISTER_SUCCESS,
-
     userId: user._id,
   };
 };
+
+// ==========================================
+// EXPORT
+// ==========================================
 
 module.exports = registerService;

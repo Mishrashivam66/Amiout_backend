@@ -1,6 +1,20 @@
+"use strict";
+
 const mongoose = require("mongoose");
 
 const { AUTH_CONSTANTS } = require("../constants");
+
+// ==========================================
+// OTP CONFIGURATION
+// ==========================================
+
+const ACCOUNT_TYPES = ["STUDENT", "FACULTY", "ADMIN", "SECURITY"];
+
+const OTP_PURPOSES = [
+  "EMAIL_VERIFICATION",
+  "PASSWORD_RESET",
+  "ACCOUNT_ACTIVATION",
+];
 
 // ==========================================
 // OTP SCHEMA
@@ -8,9 +22,9 @@ const { AUTH_CONSTANTS } = require("../constants");
 
 const otpSchema = new mongoose.Schema(
   {
-    // ==========================================
-    // USER EMAIL
-    // ==========================================
+    // ======================================
+    // ACCOUNT EMAIL
+    // ======================================
 
     email: {
       type: String,
@@ -20,9 +34,29 @@ const otpSchema = new mongoose.Schema(
       index: true,
     },
 
-    // ==========================================
-    // OTP
-    // ==========================================
+    // ======================================
+    // ACCOUNT TYPE
+    // ======================================
+
+    // Legacy OTP documents without this
+    // field are treated as STUDENT by
+    // compatible repository logic.
+
+    accountType: {
+      type: String,
+      enum: ACCOUNT_TYPES,
+      default: "STUDENT",
+      required: true,
+      uppercase: true,
+    },
+
+    // ======================================
+    // OTP CODE
+    // ======================================
+
+    // Existing OTP format retained.
+    // OTP hashing will require matching
+    // changes in generation and verification.
 
     otp: {
       type: String,
@@ -30,19 +64,20 @@ const otpSchema = new mongoose.Schema(
       select: false,
     },
 
-    // ==========================================
-    // PURPOSE
-    // ==========================================
+    // ======================================
+    // OTP PURPOSE
+    // ======================================
 
     purpose: {
       type: String,
-      enum: ["EMAIL_VERIFICATION", "PASSWORD_RESET"],
+      enum: OTP_PURPOSES,
       default: "EMAIL_VERIFICATION",
+      required: true,
     },
 
-    // ==========================================
+    // ======================================
     // OTP STATUS
-    // ==========================================
+    // ======================================
 
     isVerified: {
       type: Boolean,
@@ -52,11 +87,12 @@ const otpSchema = new mongoose.Schema(
     attempts: {
       type: Number,
       default: 0,
+      min: 0,
     },
 
-    // ==========================================
-    // EXPIRY
-    // ==========================================
+    // ======================================
+    // OTP EXPIRY
+    // ======================================
 
     expiresAt: {
       type: Date,
@@ -71,20 +107,26 @@ const otpSchema = new mongoose.Schema(
 );
 
 // ==========================================
-// AUTO DELETE EXPIRED OTP
+// QUERY INDEX
 // ==========================================
 
-otpSchema.index(
-  {
-    expiresAt: 1,
-  },
-  {
-    expireAfterSeconds: 0,
-  },
-);
+otpSchema.index({
+  email: 1,
+  accountType: 1,
+  purpose: 1,
+});
+
+// ==========================================
+// TTL INDEX
+// ==========================================
+
+// Expired OTP documents are automatically
+// deleted by MongoDB in the background.
+
+otpSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 // ==========================================
 // EXPORT MODEL
 // ==========================================
 
-module.exports = mongoose.model("OTP", otpSchema);
+module.exports = mongoose.models.OTP || mongoose.model("OTP", otpSchema);

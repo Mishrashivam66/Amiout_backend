@@ -2,7 +2,7 @@
 
 const crypto = require("node:crypto");
 const mongoose = require("mongoose");
-
+const bcrypt = require("bcrypt");
 const {
   findAccountByEmail,
   normalizeEmail,
@@ -252,6 +252,13 @@ const verifyActivationOtpService = async (email, otp) => {
     );
   }
 
+  const releaseLock = async () => {
+    await ActivationOTP.updateOne(
+      { _id: record._id },
+      { $set: { processingUntil: null } },
+    );
+  };
+
   const expectedHash = Buffer.from(record.otpHash, "hex");
   const enteredHash = Buffer.from(hashOtp(normalizedEmail, enteredOtp), "hex");
 
@@ -260,31 +267,56 @@ const verifyActivationOtpService = async (email, otp) => {
     crypto.timingSafeEqual(expectedHash, enteredHash);
 
   if (!valid) {
-    await ActivationOTP.updateOne(
-      { _id: record._id },
-      { $set: { processingUntil: null } },
-    );
-
+    await releaseLock();
     throw createError("Incorrect activation OTP.");
   }
 
   const temporaryPassword = generateTemporaryPassword();
 
-  account.password = temporaryPassword;
-  account.isVerified = true;
-  account.isActive = true;
-  account.mustChangePassword = true;
+  let hashedPassword;
 
-  // User and Mentor models must hash passwords
-  // using their Mongoose pre-save hooks.
   try {
-    await account.save();
+    hashedPassword = await bcrypt.hash(temporaryPassword, 10);
   } catch (error) {
-    await ActivationOTP.updateOne(
-      { _id: record._id },
-      { $set: { processingUntil: null } },
-    );
+    await releaseLock();
     throw error;
+  }
+
+  const AccountModel = account.constructor;
+
+  let updatedAccount;
+
+  try {
+    updatedAccount = await AccountModel.findOneAndUpdate(
+      {
+        _id: account._id,
+        isVerified: false,
+      },
+      {
+        $set: {
+          password: hashedPassword,
+          isVerified: true,
+          isActive: true,
+          mustChangePassword: true,
+          passwordChangedAt: new Date(),
+        },
+      },
+      {
+        new: true,
+        runValidators: false,
+      },
+    );
+  } catch (error) {
+    await releaseLock();
+    throw error;
+  }
+
+  if (!updatedAccount) {
+    await releaseLock();
+    throw createError(
+      "Account is already activated or could not be updated.",
+      409,
+    );
   }
 
   try {
@@ -292,9 +324,9 @@ const verifyActivationOtpService = async (email, otp) => {
       to: normalizedEmail,
       subject: "AMIOUT - Your Temporary Password",
       html: generateTemporaryPasswordTemplate({
-        name: account.name || "User",
+        name: updatedAccount.name || "User",
         email: normalizedEmail,
-        role: account.role || accountType,
+        role: updatedAccount.role || accountType,
         temporaryPassword,
         loginUrl: getLoginUrl(),
       }),
@@ -302,11 +334,8 @@ const verifyActivationOtpService = async (email, otp) => {
   } catch (error) {
     console.error("Temporary password delivery failed:", error.message);
 
-    // Account is already activated.
-    // Do not generate another password
-    // without a separate secure recovery flow.
     throw createError(
-      "Account activated, but password email delivery failed. Contact administrator for recovery.",
+      "Account activated, but temporary password email delivery failed. Contact administrator for recovery.",
       502,
     );
   } finally {

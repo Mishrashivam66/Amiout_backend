@@ -8,32 +8,54 @@ const Group = require("../models/Group");
 const Institute = require("../models/Institute");
 const Program = require("../models/Program");
 
-// =====================================================
+// ============================================================
 // HELPERS
-// =====================================================
+// ============================================================
 
-const normalize = (value) =>
+const upper = (value) =>
   String(value ?? "")
     .trim()
     .toUpperCase();
 
-const strId = (value) => String(value?._id ?? value ?? "");
+const clean = (value) => String(value ?? "").trim();
 
-const own = (value) => value !== null && value !== undefined;
+const getId = (value) => String(value?._id ?? value ?? "");
 
-const errorWithCode = (message, statusCode = 400) =>
+const sameId = (a, b) => getId(a) === getId(b);
+
+const createError = (message, statusCode = 400) =>
   Object.assign(new Error(message), { statusCode });
 
-const groupKeyFor = (student) => ({
+const facultyIdentity = (faculty) => {
+  if (!faculty) return "";
+
+  if (upper(faculty.facultyId)) {
+    return `ID:${upper(faculty.facultyId)}`;
+  }
+
+  if (clean(faculty.mentorEmail)) {
+    return `EMAIL:${clean(faculty.mentorEmail).toLowerCase()}`;
+  }
+
+  return `RECORD:${getId(faculty._id)}`;
+};
+
+const hasRole = (faculty, role) =>
+  Array.isArray(faculty?.roles) && faculty.roles.includes(role);
+
+const isActiveFaculty = (faculty) =>
+  Boolean(faculty) && faculty.isActive === true && faculty.isDeleted === false;
+
+const studentGroupKey = (student) => ({
   institute: student.institute,
   program: student.program,
-  batch: String(student.batch ?? "").trim(),
+  batch: clean(student.batch),
   semester: Number(student.semester),
-  section: normalize(student.section),
-  groupName: normalize(student.group),
+  section: upper(student.section),
+  groupName: upper(student.group),
 });
 
-const assertGroupKey = (key) => {
+const validateGroupKey = (key) => {
   if (
     !mongoose.isValidObjectId(key.institute) ||
     !mongoose.isValidObjectId(key.program) ||
@@ -43,13 +65,13 @@ const assertGroupKey = (key) => {
     !key.section ||
     !key.groupName
   ) {
-    throw errorWithCode("Student academic group details are incomplete.", 422);
+    throw createError("Incomplete student academic details.", 422);
   }
 };
 
-// =====================================================
+// ============================================================
 // ACADEMIC CONTEXT
-// =====================================================
+// ============================================================
 
 const getAcademicContext = async (group) => {
   const [institute, program] = await Promise.all([
@@ -67,47 +89,44 @@ const getAcademicContext = async (group) => {
   ]);
 
   if (!institute || !program) {
-    throw errorWithCode("Active Institute or Program not found.", 422);
+    throw createError("Active Institute or Program not found.", 422);
   }
 
-  if (strId(program.institute) !== strId(institute._id)) {
-    throw errorWithCode("Program does not belong to the Institute.", 422);
+  if (!sameId(program.institute, institute._id)) {
+    throw createError("Program belongs to another Institute.", 422);
   }
 
-  if (!normalize(institute.code) || !normalize(program.code)) {
-    throw errorWithCode("Institute or Program code missing.", 422);
+  if (!upper(institute.code) || !upper(program.code)) {
+    throw createError("Academic Institute/Program code missing.", 422);
   }
 
   return { institute, program };
 };
 
-// =====================================================
-// MENTOR ELIGIBILITY
-// =====================================================
+// ============================================================
+// PRIMARY MENTOR VALIDATION
+// ============================================================
 
-const isEligibleMentor = (mentor, group, context) =>
-  Boolean(mentor) &&
-  mentor.isActive === true &&
-  mentor.isDeleted === false &&
-  Array.isArray(mentor.roles) &&
-  mentor.roles.includes("MENTOR") &&
-  normalize(mentor.institute) === normalize(context.institute.code) &&
-  normalize(mentor.program) === normalize(context.program.code) &&
-  Number(mentor.semester) === Number(group.semester) &&
-  normalize(mentor.section) === normalize(group.section) &&
-  normalize(mentor.group) === normalize(group.groupName);
+const isPrimaryEligible = (faculty, group, context) =>
+  isActiveFaculty(faculty) &&
+  hasRole(faculty, "MENTOR") &&
+  upper(faculty.institute) === upper(context.institute.code) &&
+  upper(faculty.program) === upper(context.program.code) &&
+  Number(faculty.semester) === Number(group.semester) &&
+  upper(faculty.section) === upper(group.section) &&
+  upper(faculty.group) === upper(group.groupName);
 
-// =====================================================
-// FIND ELIGIBLE FACULTY
-// =====================================================
+// ============================================================
+// FIND PRIMARY MENTOR
+// ============================================================
 
-const getEligibleCandidates = async (group, context) => {
+const findPrimaryCandidates = async (group, context) => {
   const records = await MentorMaster.find({
-    institute: normalize(context.institute.code),
-    program: normalize(context.program.code),
+    institute: upper(context.institute.code),
+    program: upper(context.program.code),
     semester: Number(group.semester),
-    section: normalize(group.section),
-    group: normalize(group.groupName),
+    section: upper(group.section),
+    group: upper(group.groupName),
     roles: "MENTOR",
     isActive: true,
     isDeleted: false,
@@ -115,183 +134,389 @@ const getEligibleCandidates = async (group, context) => {
     .sort({ _id: 1 })
     .lean();
 
-  return records.filter((record) => isEligibleMentor(record, group, context));
+  return records.filter((faculty) =>
+    isPrimaryEligible(faculty, group, context),
+  );
 };
 
-// One faculty may have multiple MentorMaster records.
-const candidateIdentity = (mentor) => {
-  const facultyId = normalize(mentor.facultyId);
+const selectSingleFaculty = (records, authorityName) => {
+  const unique = new Map();
 
-  const email = String(mentor.mentorEmail ?? "")
-    .trim()
-    .toLowerCase();
+  for (const record of records) {
+    const identity = facultyIdentity(record);
 
-  if (facultyId) return `ID:${facultyId}`;
-
-  if (email) return `EMAIL:${email}`;
-
-  return `RECORD:${strId(mentor._id)}`;
-};
-
-// =====================================================
-// SELECT PRIMARY MENTOR
-// =====================================================
-
-const pickUnambiguousPrimary = (candidates) => {
-  const byFaculty = new Map();
-
-  for (const mentor of candidates) {
-    const key = candidateIdentity(mentor);
-
-    if (!byFaculty.has(key)) {
-      byFaculty.set(key, mentor);
+    if (!unique.has(identity)) {
+      unique.set(identity, record);
     }
   }
 
-  if (byFaculty.size === 0) {
-    throw errorWithCode("No eligible primary mentor found.", 422);
+  if (unique.size === 0) {
+    throw createError(`No eligible ${authorityName} found.`, 422);
   }
 
-  if (byFaculty.size > 1) {
-    throw errorWithCode(
-      "Multiple eligible faculties found; assign primary mentor manually.",
+  if (unique.size > 1) {
+    throw createError(
+      `Multiple ${authorityName} faculties found. Manual configuration required.`,
       409,
     );
   }
 
-  return [...byFaculty.values()][0];
+  return [...unique.values()][0];
 };
 
-// =====================================================
-// GET OR CREATE GROUP
-// =====================================================
+// ============================================================
+// FIND OR CREATE GROUP
+// ============================================================
 
-const getOrCreateActiveGroup = async (key) => {
-  // Do not silently reactivate deleted groups.
+const getOrCreateGroup = async (key) => {
+  validateGroupKey(key);
+
   let group = await Group.findOne(key).lean();
 
   if (!group) {
     try {
       group = await Group.create({
         ...key,
+        primaryMentor: null,
+        backupMentor: null,
         isActive: true,
         isDeleted: false,
       });
     } catch (error) {
-      if (error.code !== 11000) {
-        throw error;
-      }
+      if (error.code !== 11000) throw error;
 
       group = await Group.findOne(key).lean();
     }
   }
 
-  if (!group || !group.isActive || group.isDeleted) {
-    throw errorWithCode("Group is inactive, deleted, or unavailable.", 409);
+  if (!group || group.isActive !== true || group.isDeleted === true) {
+    throw createError("Academic Group is inactive or unavailable.", 409);
   }
 
   return group;
 };
 
-// =====================================================
-// RESOLVE PRIMARY + BACKUP MENTOR
-// =====================================================
+// ============================================================
+// RESOLVE PRIMARY MENTOR
+// ============================================================
 
-const resolveGroupMentors = async (group, context) => {
-  const candidates = await getEligibleCandidates(group, context);
-
-  let primaryId;
-
-  if (own(group.primaryMentor)) {
+const resolvePrimaryMentor = async (group, context) => {
+  if (group.primaryMentor) {
     const existing = await MentorMaster.findById(group.primaryMentor).lean();
 
-    if (!isEligibleMentor(existing, group, context)) {
-      throw errorWithCode(
-        "Existing primary mentor is invalid or inactive.",
+    if (!isPrimaryEligible(existing, group, context)) {
+      throw createError("Existing primary mentor is invalid or inactive.", 409);
+    }
+
+    return existing;
+  }
+
+  const candidates = await findPrimaryCandidates(group, context);
+
+  const selected = selectSingleFaculty(candidates, "Primary Mentor");
+
+  const result = await Group.updateOne(
+    {
+      _id: group._id,
+      primaryMentor: null,
+      isActive: true,
+      isDeleted: false,
+    },
+    {
+      $set: {
+        primaryMentor: selected._id,
+      },
+    },
+  );
+
+  if (result.matchedCount !== 1) {
+    const latest = await Group.findById(group._id).lean();
+    const current = latest?.primaryMentor
+      ? await MentorMaster.findById(latest.primaryMentor).lean()
+      : null;
+
+    if (!isPrimaryEligible(current, latest, context)) {
+      throw createError("Primary mentor changed during mapping.", 409);
+    }
+
+    return current;
+  }
+
+  return selected;
+};
+
+// ============================================================
+// VALIDATE CROSS-GROUP BACKUP
+// ============================================================
+
+const getValidBackup = async (group, context, primary) => {
+  if (!group.backupMentor) return null;
+
+  const backup = await MentorMaster.findById(group.backupMentor).lean();
+
+  if (!isActiveFaculty(backup) || !hasRole(backup, "MENTOR")) {
+    throw createError("Backup Mentor is invalid or inactive.", 409);
+  }
+
+  if (facultyIdentity(primary) === facultyIdentity(backup)) {
+    throw createError("Primary and Backup must be different faculties.", 409);
+  }
+
+  const pairedGroup = await Group.findOne({
+    institute: group.institute,
+    program: group.program,
+    batch: group.batch,
+    semester: group.semester,
+    section: group.section,
+    groupName: upper(backup.group),
+    primaryMentor: backup._id,
+    _id: { $ne: group._id },
+    isActive: true,
+    isDeleted: false,
+  }).lean();
+
+  if (!pairedGroup || !isPrimaryEligible(backup, pairedGroup, context)) {
+    throw createError("Backup is not an authorized paired-group Mentor.", 409);
+  }
+
+  return backup;
+};
+
+// ============================================================
+// CROSS-GROUP BACKUP MAPPING
+// ============================================================
+
+const assignCrossGroupBackups = async (
+  instituteId,
+  programId,
+  batch,
+  semester,
+  section,
+) => {
+  const groups = await Group.find({
+    institute: instituteId,
+    program: programId,
+    batch,
+    semester,
+    section: upper(section),
+    isActive: true,
+    isDeleted: false,
+  })
+    .sort({ groupName: 1 })
+    .lean();
+
+  if (groups.length !== 2) {
+    return {
+      assigned: false,
+      reason: "Exactly two active groups required for automatic mutual backup.",
+    };
+  }
+
+  const [groupA, groupB] = groups;
+
+  if (!groupA.primaryMentor || !groupB.primaryMentor) {
+    return {
+      assigned: false,
+      reason: "Both Primary Mentors are required.",
+    };
+  }
+
+  const context = await getAcademicContext(groupA);
+
+  const [mentorA, mentorB] = await Promise.all([
+    MentorMaster.findById(groupA.primaryMentor).lean(),
+
+    MentorMaster.findById(groupB.primaryMentor).lean(),
+  ]);
+
+  if (
+    !isPrimaryEligible(mentorA, groupA, context) ||
+    !isPrimaryEligible(mentorB, groupB, context)
+  ) {
+    throw createError("Invalid Primary Mentor in paired groups.", 409);
+  }
+
+  if (facultyIdentity(mentorA) === facultyIdentity(mentorB)) {
+    throw createError("Both groups cannot share the same backup faculty.", 409);
+  }
+
+  const pairs = [
+    { group: groupA, backup: mentorB },
+    { group: groupB, backup: mentorA },
+  ];
+
+  // Validate all existing assignments before updates.
+  for (const { group, backup } of pairs) {
+    if (group.backupMentor && !sameId(group.backupMentor, backup._id)) {
+      throw createError(
+        `Conflicting Backup Mentor for ${group.groupName}.`,
         409,
       );
     }
+  }
 
-    primaryId = existing._id;
-  } else {
-    const selected = pickUnambiguousPrimary(candidates);
-
-    // Never overwrite concurrent manual assignment.
-    await Group.updateOne(
+  // Idempotent; partially completed mapping can retry.
+  for (const { group, backup } of pairs) {
+    const result = await Group.updateOne(
       {
         _id: group._id,
-        primaryMentor: null,
+        primaryMentor: group.primaryMentor,
+        backupMentor: group.backupMentor ?? null,
         isActive: true,
         isDeleted: false,
       },
       {
         $set: {
-          primaryMentor: selected._id,
+          backupMentor: backup._id,
         },
       },
     );
 
-    const latest = await Group.findById(group._id).lean();
-
-    if (!latest || !latest.isActive || latest.isDeleted) {
-      throw errorWithCode("Group changed during mapping.", 409);
-    }
-
-    const chosen = await MentorMaster.findById(latest.primaryMentor).lean();
-
-    if (!isEligibleMentor(chosen, group, context)) {
-      throw errorWithCode(
-        "Group primary mentor changed to an ineligible faculty.",
+    if (result.matchedCount !== 1) {
+      throw createError(
+        `Group ${group.groupName} changed. Retry mapping.`,
         409,
       );
     }
-
-    primaryId = chosen._id;
   }
 
-  const latest = await Group.findById(group._id).lean();
-
-  if (!latest || !latest.isActive || latest.isDeleted) {
-    throw errorWithCode("Group unavailable during mapping.", 409);
-  }
-
-  if (strId(latest.primaryMentor) !== strId(primaryId)) {
-    throw errorWithCode("Primary mentor changed during mapping; retry.", 409);
-  }
-
-  let backupId = null;
-
-  if (own(latest.backupMentor)) {
-    const backup = await MentorMaster.findById(latest.backupMentor).lean();
-
-    if (!isEligibleMentor(backup, group, context)) {
-      throw errorWithCode(
-        "Configured backup mentor is invalid or inactive.",
-        409,
-      );
-    }
-
-    const primary = await MentorMaster.findById(primaryId).lean();
-
-    if (candidateIdentity(backup) === candidateIdentity(primary)) {
-      throw errorWithCode(
-        "Primary and backup cannot be the same faculty.",
-        409,
-      );
-    }
-
-    backupId = backup._id;
+  for (const { group, backup } of pairs) {
+    await StudentMaster.updateMany(
+      {
+        institute: group.institute,
+        program: group.program,
+        batch: group.batch,
+        semester: group.semester,
+        section: group.section,
+        group: group.groupName,
+        mentorGroup: group._id,
+        primaryMentor: group.primaryMentor,
+        isActive: true,
+        isDeleted: false,
+      },
+      {
+        $set: {
+          backupMentor: backup._id,
+        },
+      },
+    );
   }
 
   return {
-    primaryId,
-    backupId,
+    assigned: true,
+    groups: [
+      {
+        group: groupA.groupName,
+        primaryMentor: mentorA.name,
+        backupMentor: mentorB.name,
+      },
+      {
+        group: groupB.groupName,
+        primaryMentor: mentorB.name,
+        backupMentor: mentorA.name,
+      },
+    ],
   };
 };
 
-// =====================================================
-// GENERATE AUTOMATIC STUDENT MAPPING
-// =====================================================
+// ============================================================
+// AUTHORITY RESOLUTION
+// Coordinator -> HOD -> HOI
+// Does not approve or transfer requests.
+// ============================================================
+
+const resolveHigherAuthorities = async (group, departmentCode = null) => {
+  const context = await getAcademicContext(group);
+
+  const base = {
+    institute: upper(context.institute.code),
+    isActive: true,
+    isDeleted: false,
+  };
+
+  // --------------------------------------------------------
+  // COORDINATOR
+  // --------------------------------------------------------
+
+  const coordinatorRecords = await MentorMaster.find({
+    ...base,
+    program: upper(context.program.code),
+    semester: Number(group.semester),
+    section: upper(group.section),
+    roles: "COORDINATOR",
+    coordinatorGroups: upper(group.groupName),
+  }).lean();
+
+  const coordinatorCandidates = coordinatorRecords.filter(
+    (faculty) =>
+      isActiveFaculty(faculty) &&
+      hasRole(faculty, "COORDINATOR") &&
+      Array.isArray(faculty.coordinatorGroups) &&
+      faculty.coordinatorGroups.map(upper).includes(upper(group.groupName)),
+  );
+
+  // --------------------------------------------------------
+  // HOD
+  // Department must come from trusted academic configuration.
+  // --------------------------------------------------------
+
+  const department = upper(departmentCode);
+
+  const hodRecords = department
+    ? await MentorMaster.find({
+        ...base,
+        department,
+        roles: "HOD",
+      }).lean()
+    : [];
+
+  // --------------------------------------------------------
+  // HOI
+  // --------------------------------------------------------
+
+  const hoiRecords = await MentorMaster.find({
+    ...base,
+    roles: "HOI",
+  }).lean();
+
+  const uniqueFaculties = (records) => {
+    const result = new Map();
+
+    for (const faculty of records) {
+      if (!isActiveFaculty(faculty)) continue;
+
+      result.set(facultyIdentity(faculty), faculty);
+    }
+
+    return [...result.values()];
+  };
+
+  const format = (records, role) =>
+    uniqueFaculties(records).map((faculty) => ({
+      mentorMasterId: faculty._id,
+      mentorUser: faculty.mentorUser ?? null,
+      facultyId: faculty.facultyId,
+      name: faculty.name,
+      role,
+    }));
+
+  return {
+    coordinator: format(coordinatorCandidates, "COORDINATOR"),
+
+    hod: format(hodRecords, "HOD"),
+
+    hoi: format(hoiRecords, "HOI"),
+
+    departmentResolved: Boolean(department),
+  };
+};
+
+// ============================================================
+// GENERATE STUDENT MAPPING
+// PHASE 1: PRIMARY
+// PHASE 2: CROSS-GROUP BACKUP
+// PHASE 3: AUTHORITY VALIDATION REPORT
+// ============================================================
 
 const generateMapping = async () => {
   const students = await StudentMaster.find({
@@ -304,53 +529,65 @@ const generateMapping = async () => {
     .lean();
 
   const errors = [];
+  const resolvedGroups = new Map();
+  const processedSections = new Map();
+
   let mapped = 0;
 
-  const cache = new Map();
+  // --------------------------------------------------------
+  // PHASE 1: PRIMARY MENTOR
+  // --------------------------------------------------------
 
   for (const student of students) {
     try {
-      const key = groupKeyFor(student);
-
-      assertGroupKey(key);
+      const key = studentGroupKey(student);
+      validateGroupKey(key);
 
       const cacheKey = [
-        strId(key.institute),
-        strId(key.program),
+        getId(key.institute),
+        getId(key.program),
         key.batch,
         key.semester,
         key.section,
         key.groupName,
       ].join("|");
 
-      let resolved = cache.get(cacheKey);
+      let resolved = resolvedGroups.get(cacheKey);
 
       if (!resolved) {
-        const group = await getOrCreateActiveGroup(key);
-
+        const group = await getOrCreateGroup(key);
         const context = await getAcademicContext(group);
 
-        const mentors = await resolveGroupMentors(group, context);
+        const primary = await resolvePrimaryMentor(group, context);
+
+        const latest = await Group.findById(group._id).lean();
+
+        if (!latest || !sameId(latest.primaryMentor, primary._id)) {
+          throw createError("Primary assignment changed. Retry.", 409);
+        }
+
+        const backup = await getValidBackup(latest, context, primary);
 
         resolved = {
-          groupId: group._id,
-          ...mentors,
+          groupId: latest._id,
+          primaryId: primary._id,
+          backupId: backup?._id ?? null,
         };
 
-        cache.set(cacheKey, resolved);
+        resolvedGroups.set(cacheKey, resolved);
       }
 
       const result = await StudentMaster.updateOne(
         {
           _id: student._id,
-          isActive: true,
-          isDeleted: false,
           institute: key.institute,
           program: key.program,
           batch: key.batch,
           semester: key.semester,
           section: key.section,
           group: key.groupName,
+          isActive: true,
+          isDeleted: false,
         },
         {
           $set: {
@@ -362,13 +599,22 @@ const generateMapping = async () => {
       );
 
       if (result.matchedCount !== 1) {
-        throw errorWithCode(
-          "Student record changed during mapping; retry.",
-          409,
-        );
+        throw createError("Student academic record changed.", 409);
       }
 
       mapped++;
+
+      const sectionKey = [
+        getId(key.institute),
+        getId(key.program),
+        key.batch,
+        key.semester,
+        key.section,
+      ].join("|");
+
+      if (!processedSections.has(sectionKey)) {
+        processedSections.set(sectionKey, key);
+      }
     } catch (error) {
       errors.push({
         enrollmentNumber: student.enrollmentNumber,
@@ -378,25 +624,104 @@ const generateMapping = async () => {
     }
   }
 
+  // --------------------------------------------------------
+  // PHASE 2: MUTUAL BACKUP
+  // --------------------------------------------------------
+
+  const backupResults = [];
+
+  for (const key of processedSections.values()) {
+    try {
+      const result = await assignCrossGroupBackups(
+        key.institute,
+        key.program,
+        key.batch,
+        key.semester,
+        key.section,
+      );
+
+      backupResults.push({
+        batch: key.batch,
+        semester: key.semester,
+        section: key.section,
+        ...result,
+      });
+    } catch (error) {
+      backupResults.push({
+        batch: key.batch,
+        semester: key.semester,
+        section: key.section,
+        assigned: false,
+        reason: error.message,
+      });
+    }
+  }
+
+  // --------------------------------------------------------
+  // PHASE 3: HIGHER AUTHORITY STATUS
+  // --------------------------------------------------------
+
+  const authorityResults = [];
+
+  for (const key of processedSections.values()) {
+    try {
+      const group = await Group.findOne({
+        ...key,
+        isActive: true,
+        isDeleted: false,
+      }).lean();
+
+      if (!group) continue;
+
+      // Department mapping is not available in current
+      // Program schema. HOD resolution stays unresolved.
+      const authorities = await resolveHigherAuthorities(group);
+
+      authorityResults.push({
+        batch: key.batch,
+        section: key.section,
+        group: key.groupName,
+        coordinatorCount: authorities.coordinator.length,
+        hodCount: authorities.hod.length,
+        hoiCount: authorities.hoi.length,
+        departmentResolved: authorities.departmentResolved,
+      });
+    } catch (error) {
+      authorityResults.push({
+        section: key.section,
+        group: key.groupName,
+        reason: error.message,
+      });
+    }
+  }
+
+  const failedBackups = backupResults.filter((item) => !item.assigned);
+
   return {
-    success: errors.length === 0,
+    success: errors.length === 0 && failedBackups.length === 0,
+
     totalStudents: students.length,
     mapped,
     failed: errors.length,
     errors,
+
+    backupResults,
+    failedBackupSections: failedBackups.length,
+
+    authorityResults,
   };
 };
 
-// =====================================================
-// MANUAL PRIMARY / BACKUP ASSIGNMENT
-// =====================================================
+// ============================================================
+// MANUAL MENTOR ASSIGNMENT
+// ============================================================
 
 const assignMentor = async (groupId, mentorId, field) => {
   if (
     !mongoose.isValidObjectId(groupId) ||
     !mongoose.isValidObjectId(mentorId)
   ) {
-    throw errorWithCode("Valid groupId and mentorId required.");
+    throw createError("Valid Group and Mentor IDs required.", 400);
   }
 
   const group = await Group.findOne({
@@ -406,40 +731,59 @@ const assignMentor = async (groupId, mentorId, field) => {
   }).lean();
 
   if (!group) {
-    throw errorWithCode("Active group not found.", 404);
+    throw createError("Group not found.", 404);
   }
 
   const context = await getAcademicContext(group);
 
-  const mentor = await MentorMaster.findById(mentorId).lean();
+  const faculty = await MentorMaster.findById(mentorId).lean();
 
-  if (!isEligibleMentor(mentor, group, context)) {
-    throw errorWithCode(
-      "Mentor is not authorized for this academic group.",
-      422,
-    );
+  if (!isActiveFaculty(faculty) || !hasRole(faculty, "MENTOR")) {
+    throw createError("Faculty is not an active Mentor.", 422);
+  }
+
+  if (field === "primaryMentor") {
+    if (!isPrimaryEligible(faculty, group, context)) {
+      throw createError("Primary Mentor academic scope mismatch.", 422);
+    }
+  } else {
+    // Backup must be primary of another group
+    // within the same institute/program/batch/section.
+    const paired = await Group.findOne({
+      institute: group.institute,
+      program: group.program,
+      batch: group.batch,
+      semester: group.semester,
+      section: group.section,
+      groupName: upper(faculty.group),
+      primaryMentor: faculty._id,
+      _id: { $ne: group._id },
+      isActive: true,
+      isDeleted: false,
+    }).lean();
+
+    if (!paired || !isPrimaryEligible(faculty, paired, context)) {
+      throw createError(
+        "Backup Mentor must be a paired-group Primary Mentor.",
+        422,
+      );
+    }
   }
 
   const otherField =
     field === "primaryMentor" ? "backupMentor" : "primaryMentor";
 
-  if (own(group[otherField])) {
-    const otherMentor = await MentorMaster.findById(group[otherField]).lean();
+  if (group[otherField]) {
+    const other = await MentorMaster.findById(group[otherField]).lean();
 
-    if (
-      otherMentor &&
-      candidateIdentity(otherMentor) === candidateIdentity(mentor)
-    ) {
-      throw errorWithCode(
-        "Primary and backup must be different faculties.",
-        409,
-      );
+    if (other && facultyIdentity(other) === facultyIdentity(faculty)) {
+      throw createError("Primary and Backup must be different faculties.", 409);
     }
   }
 
   const updated = await Group.findOneAndUpdate(
     {
-      _id: groupId,
+      _id: group._id,
       isActive: true,
       isDeleted: false,
       [field]: group[field] ?? null,
@@ -447,7 +791,7 @@ const assignMentor = async (groupId, mentorId, field) => {
     },
     {
       $set: {
-        [field]: mentor._id,
+        [field]: faculty._id,
       },
     },
     {
@@ -457,48 +801,48 @@ const assignMentor = async (groupId, mentorId, field) => {
   );
 
   if (!updated) {
-    throw errorWithCode("Group assignment changed; retry.", 409);
+    throw createError("Group mapping changed. Retry assignment.", 409);
   }
 
-  // Synchronize students using full academic identity.
-  const key = {
-    institute: updated.institute,
-    program: updated.program,
-    batch: updated.batch,
-    semester: updated.semester,
-    section: updated.section,
-    group: updated.groupName,
-    isActive: true,
-    isDeleted: false,
-  };
-
-  await StudentMaster.updateMany(key, {
-    $set: {
-      mentorGroup: updated._id,
-      [field]: mentor._id,
+  await StudentMaster.updateMany(
+    {
+      institute: updated.institute,
+      program: updated.program,
+      batch: updated.batch,
+      semester: updated.semester,
+      section: updated.section,
+      group: updated.groupName,
+      isActive: true,
+      isDeleted: false,
     },
-  });
+    {
+      $set: {
+        mentorGroup: updated._id,
+        [field]: faculty._id,
+      },
+    },
+  );
 
   return updated;
 };
 
-// =====================================================
+// ============================================================
 // ASSIGN PRIMARY MENTOR
-// =====================================================
+// ============================================================
 
 const assignPrimaryMentor = (groupId, mentorId) =>
   assignMentor(groupId, mentorId, "primaryMentor");
 
-// =====================================================
+// ============================================================
 // ASSIGN BACKUP MENTOR
-// =====================================================
+// ============================================================
 
 const assignBackupMentor = (groupId, mentorId) =>
   assignMentor(groupId, mentorId, "backupMentor");
 
-// =====================================================
+// ============================================================
 // GET GROUP MAPPING
-// =====================================================
+// ============================================================
 
 const getGroupMapping = async (
   instituteId,
@@ -511,13 +855,13 @@ const getGroupMapping = async (
   const key = {
     institute: instituteId,
     program: programId,
-    batch: String(batch ?? "").trim(),
+    batch: clean(batch),
     semester: Number(semester),
-    section: normalize(section),
-    groupName: normalize(groupName),
+    section: upper(section),
+    groupName: upper(groupName),
   };
 
-  assertGroupKey(key);
+  validateGroupKey(key);
 
   const group = await Group.findOne({
     ...key,
@@ -534,19 +878,21 @@ const getGroupMapping = async (
     );
 
   if (!group) {
-    throw errorWithCode("Group not found.", 404);
+    throw createError("Group not found.", 404);
   }
 
   return group;
 };
 
-// =====================================================
-// EXPORT
-// =====================================================
+// ============================================================
+// EXPORTS
+// ============================================================
 
 module.exports = Object.freeze({
   generateMapping,
   assignPrimaryMentor,
   assignBackupMentor,
+  assignCrossGroupBackups,
+  resolveHigherAuthorities,
   getGroupMapping,
 });

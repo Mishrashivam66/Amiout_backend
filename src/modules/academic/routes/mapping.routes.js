@@ -4,36 +4,50 @@ const express = require("express");
 
 const router = express.Router();
 
-const mentorController = require("../controllers/mentor.controller");
+const mappingController = require("../controllers/mapping.controller");
 
 const { protect } = require("../../../middlewares/auth.middleware");
 const authorize = require("../../../middlewares/role.middleware");
 const ROLES = require("../../auth/constants/roles");
 
-// ============================================================================
-// Protected Routes
-// ============================================================================
+// ==========================================
+// AUTHENTICATION & AUTHORIZATION
+// ==========================================
 
+// Only authenticated administrators can manage mappings
 router.use(protect);
-
 router.use(authorize(ROLES.ADMIN));
 
-// ============================================================================
-// Mentor Routes
-// ============================================================================
+// ==========================================
+// GENERATE AUTOMATIC STUDENT MAPPING
+// ==========================================
 
-router.get("/", mentorController.getAllMentors);
+// POST /mapping/generate
+router.post("/generate", mappingController.generateMapping);
 
-router.get("/:id", mentorController.getMentorById);
+// ==========================================
+// ASSIGN PRIMARY MENTOR
+// ==========================================
 
-router.post("/", mentorController.createMentor);
+// POST /mapping/primary-mentor
+router.post("/primary-mentor", mappingController.assignPrimaryMentor);
 
-router.patch("/:id", mentorController.updateMentor);
+// ==========================================
+// ASSIGN BACKUP MENTOR
+// ==========================================
 
-router.delete("/:id", mentorController.deleteMentor);
+// POST /mapping/backup-mentor
+router.post("/backup-mentor", mappingController.assignBackupMentor);
 
-// ============================================================================
-// Export
-// ============================================================================
+// ==========================================
+// GET GROUP MAPPING
+// ==========================================
+
+// GET /mapping/group
+router.get("/group", mappingController.getGroupMapping);
+
+// ==========================================
+// EXPORT ROUTER
+// ==========================================
 
 module.exports = router;

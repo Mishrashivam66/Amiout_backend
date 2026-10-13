@@ -46,6 +46,14 @@ const programSchema = new mongoose.Schema(
       min: 1,
       max: 10,
     },
+    department: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      maxlength: 150,
+      index: true,
+      default: null,
+    },
 
     // ============================================================================
     // Total Semesters

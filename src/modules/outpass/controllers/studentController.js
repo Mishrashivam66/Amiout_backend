@@ -1,74 +1,162 @@
+"use strict";
+
 const asyncHandler = require("express-async-handler");
+const mongoose = require("mongoose");
 
 const outpassService = require("../services");
+const Outpass = require("../models/Outpass");
 
-// ============================================================================
-// Apply Outpass
-// ============================================================================
+// ============================================================
+// HELPERS
+// ============================================================
+
+const getStudentId = (req) => req.user?._id || req.user?.id;
+
+const sendResult = (res, result, successStatus = 200, failureStatus = 400) => {
+  if (!result || typeof result.success !== "boolean") {
+    return res.status(500).json({
+      success: false,
+      message: "Unexpected outpass service response.",
+    });
+  }
+
+  return res
+    .status(result.success ? successStatus : failureStatus)
+    .json(result);
+};
+
+// ============================================================
+// APPLY OUTPASS
+// POST /outpass/apply
+// ============================================================
+
 const applyOutpass = asyncHandler(async (req, res) => {
-  const result = await outpassService.applyOutpass(req.user.id, req.body);
+  const studentId = getStudentId(req);
 
-  const statusCode = result.success ? 201 : 400;
+  if (!studentId) {
+    return res.status(401).json({
+      success: false,
+      message: "Student authentication required.",
+    });
+  }
 
-  return res.status(statusCode).json(result);
+  const result = await outpassService.applyOutpass(studentId, req.body);
+
+  return sendResult(res, result, 201, 400);
 });
 
-// ============================================================================
-// Get Student History
-// ============================================================================
+// ============================================================
+// GET STUDENT HISTORY
+// GET /outpass/history
+// ============================================================
+
 const getHistory = asyncHandler(async (req, res) => {
-  const page = Number(req.query.page) || 1;
+  const studentId = getStudentId(req);
 
-  const limit = Number(req.query.limit) || 10;
+  const parsedPage = Number(req.query.page);
+  const parsedLimit = Number(req.query.limit);
 
-  const result = await outpassService.getStudentHistory(
-    req.user.id,
-    page,
-    limit,
-  );
+  const page = Number.isInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
 
-  return res.status(200).json(result);
+  const limit =
+    Number.isInteger(parsedLimit) && parsedLimit > 0
+      ? Math.min(parsedLimit, 50)
+      : 10;
+
+  const result = await outpassService.getStudentHistory(studentId, page, limit);
+
+  return sendResult(res, result, 200, 400);
 });
 
-// ============================================================================
-// Get Active Outpass
-// ============================================================================
+// ============================================================
+// GET ACTIVE OUTPASS
+// GET /outpass/active
+// ============================================================
+
 const getActiveOutpass = asyncHandler(async (req, res) => {
-  const result = await outpassService.getActiveOutpass(req.user.id);
+  const studentId = getStudentId(req);
 
-  const statusCode = result.success ? 200 : 404;
+  const result = await outpassService.getActiveOutpass(studentId);
 
-  return res.status(statusCode).json(result);
+  return sendResult(res, result, 200, 404);
 });
 
-// ============================================================================
-// Get Outpass Details
-// ============================================================================
+// ============================================================
+// GET OUTPASS DETAILS
+// GET /outpass/:outpassId
+// ============================================================
+
 const getOutpassDetails = asyncHandler(async (req, res) => {
-  const result = await outpassService.getOutpassDetails(req.params.outpassId);
+  const studentId = getStudentId(req);
+  const outpassId = String(req.params.outpassId || "").trim();
 
-  const statusCode = result.success ? 200 : 404;
+  if (!outpassId) {
+    return res.status(400).json({
+      success: false,
+      message: "Outpass ID is required.",
+    });
+  }
 
-  return res.status(statusCode).json(result);
+  // Supports both MongoDB ObjectId and
+  // custom public outpassId identifiers.
+  const identifierQuery = mongoose.isValidObjectId(outpassId)
+    ? {
+        $or: [{ _id: outpassId }, { outpassId }],
+      }
+    : { outpassId };
+
+  // Ownership must be verified before calling
+  // the existing details service.
+  const ownedOutpass = await Outpass.findOne({
+    ...identifierQuery,
+    student: studentId,
+    isDeleted: false,
+  })
+    .select("_id")
+    .lean();
+
+  if (!ownedOutpass) {
+    return res.status(404).json({
+      success: false,
+      message: "Outpass not found.",
+    });
+  }
+
+  // Use the original identifier to preserve the
+  // existing service's lookup behavior.
+  const result = await outpassService.getOutpassDetails(outpassId);
+
+  return sendResult(res, result, 200, 404);
 });
 
-// ============================================================================
-// Cancel Outpass
-// ============================================================================
+// ============================================================
+// CANCEL OUTPASS
+// PATCH /outpass/:outpassId/cancel
+// ============================================================
+
 const cancelOutpass = asyncHandler(async (req, res) => {
-  const result = await outpassService.cancelOutpass(
-    req.user.id,
-    req.params.outpassId,
-  );
+  const studentId = getStudentId(req);
+  const outpassId = String(req.params.outpassId || "").trim();
 
-  const statusCode = result.success ? 200 : 400;
+  if (!outpassId) {
+    return res.status(400).json({
+      success: false,
+      message: "Outpass ID is required.",
+    });
+  }
 
-  return res.status(statusCode).json(result);
+  // Existing cancel service must enforce:
+  // - Outpass belongs to student
+  // - Request is cancellable
+  // - Approved QR cannot be improperly reused
+  const result = await outpassService.cancelOutpass(studentId, outpassId);
+
+  return sendResult(res, result, 200, 400);
 });
 
-// ============================================================================
-// Export Controller
-// ============================================================================
+// ============================================================
+// EXPORT CONTROLLER
+// ============================================================
 
 module.exports = Object.freeze({
   applyOutpass,

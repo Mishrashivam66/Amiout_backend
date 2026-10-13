@@ -1,64 +1,138 @@
+"use strict";
 
+// ============================================================
+// HELPERS
+// ============================================================
+
+const getValue = (...values) => {
+  for (const value of values) {
+    if (value !== undefined && value !== null && value !== "") {
+      return value;
+    }
+  }
+
+  return null;
+};
+
+const getSafeNumber = (value) => {
+  const number = Number(value);
+
+  return Number.isFinite(number) && number >= 0 ? number : 0;
+};
+
+// ============================================================
+// STUDENT DASHBOARD DTO
+// ============================================================
 
 const dashboardDTO = ({
   user,
-  profile,
+  studentMaster = null,
+  profile = null,
   currentOutpass = null,
   statistics = {},
   recentActivities = [],
   notifications = [],
   announcements = [],
+  unreadNotificationCount = 0,
+  recentOutpasses = [],
 }) => {
+  const master = studentMaster || {};
+
   return {
+    // ========================================================
+    // STUDENT DETAILS
+    // ========================================================
+
     student: {
       id: user._id,
 
-      name: user.name,
+      name: getValue(master.name, user.name),
 
-      enrollmentNo: user.enrollmentNo,
+      enrollmentNo: getValue(
+        master.enrollmentNumber,
+        user.enrollmentNo,
+        user.enrollmentNumber,
+      ),
 
-      email: user.email,
+      enrollmentNumber: getValue(
+        master.enrollmentNumber,
+        user.enrollmentNo,
+        user.enrollmentNumber,
+      ),
 
-      mobileNumber: user.mobileNumber,
+      rollNumber: getValue(master.rollNumber),
 
-      course: user.course,
+      email: getValue(master.email, user.email),
 
-      branch: user.branch,
+      mobileNumber: getValue(master.mobileNumber, user.mobileNumber),
 
-      semester: user.semester,
+      course: getValue(master.program?.name, user.course),
 
-      section: user.section,
+      branch: getValue(master.program?.name, user.branch),
+
+      semester: getValue(master.semester, user.semester),
+
+      section: getValue(master.section, user.section),
+
+      group: getValue(master.group),
+
+      batch: getValue(master.batch),
     },
+
+    // ========================================================
+    // PROFILE INFORMATION
+    // Compatibility only - no profile lock requirement.
+    // ========================================================
 
     profile: {
-      completed: profile.profileCompleted,
+      completed: Boolean(studentMaster),
 
-      locked: profile.profileLocked,
+      locked: false,
 
-      accountStatus: profile.accountStatus,
+      accountStatus: profile?.accountStatus || null,
 
-      holdReason: profile.holdReason,
+      holdReason: profile?.holdReason || "",
     },
+
+    // ========================================================
+    // DASHBOARD STATISTICS
+    // ========================================================
 
     statistics: {
-      totalRequests: statistics.totalRequests || 0,
+      totalRequests: getSafeNumber(statistics.totalRequests),
 
-      pendingRequests: statistics.pendingRequests || 0,
+      pendingRequests: getSafeNumber(statistics.pendingRequests),
 
-      approvedRequests: statistics.approvedRequests || 0,
+      approvedRequests: getSafeNumber(statistics.approvedRequests),
 
-      rejectedRequests: statistics.rejectedRequests || 0,
+      rejectedRequests: getSafeNumber(statistics.rejectedRequests),
 
-      cancelledRequests: statistics.cancelledRequests || 0,
+      cancelledRequests: getSafeNumber(statistics.cancelledRequests),
+
+      exitedRequests: getSafeNumber(statistics.exitedRequests),
+
+      returnedRequests: getSafeNumber(statistics.returnedRequests),
     },
+
+    // ========================================================
+    // CURRENT OUTPASS
+    // ========================================================
 
     currentOutpass,
 
-    recentActivities,
+    // ========================================================
+    // RECENT DATA
+    // ========================================================
 
-    notifications,
+    recentActivities: Array.isArray(recentActivities) ? recentActivities : [],
 
-    announcements,
+    notifications: Array.isArray(notifications) ? notifications : [],
+
+    recentOutpasses: Array.isArray(recentOutpasses) ? recentOutpasses : [],
+
+    announcements: Array.isArray(announcements) ? announcements : [],
+
+    unreadNotificationCount: getSafeNumber(unreadNotificationCount),
 
     generatedAt: new Date(),
   };

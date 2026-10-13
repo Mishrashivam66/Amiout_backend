@@ -1,294 +1,410 @@
-const { validateProfile } = require("../validators/profileValidator");
-const { mapMentor } = require("./profileMapping.service");
-const profileRepository = require("../repositories/profileRepository");
+"use strict";
+
+const StudentProfile = require("../models/StudentProfile");
+
+const StudentMaster = require("../../academic/models/StudentMaster");
+
+const MentorMaster = require("../../academic/models/MentorMaster");
+
+const Mentor = require("../../auth/models/Mentor");
+
+const authRepository = require("../../auth/repositories/auth.repository");
 
 const {
   ACCOUNT_STATUS,
   PROFILE_STATUS,
 } = require("../constants/studentConstants");
 
-const getProfile = async (userId) => {
-  const profile = await profileRepository.findByUserId(userId);
+// ============================================================
+// HELPERS
+// ============================================================
 
-  if (!profile) {
-    return {
-      success: false,
-      message: "Student profile not found.",
-    };
+const normalize = (value) =>
+  String(value ?? "")
+    .trim()
+    .toUpperCase();
+
+const clean = (value) => String(value ?? "").trim();
+
+const idOf = (value) => String(value?._id ?? value ?? "");
+
+const fail = (message) => ({
+  success: false,
+  message,
+});
+
+const getEnrollmentNumber = (student) =>
+  normalize(student?.enrollmentNo || student?.enrollmentNumber);
+
+// ============================================================
+// RESOLVE VERIFIED PRIMARY MENTOR ACCOUNT
+// ============================================================
+
+const resolvePrimaryMentor = async (studentMaster) => {
+  if (!studentMaster.primaryMentor) {
+    return null;
+  }
+
+  const mentorMaster = await MentorMaster.findOne({
+    _id: studentMaster.primaryMentor,
+    isActive: true,
+    isDeleted: false,
+    roles: "MENTOR",
+  }).lean();
+
+  if (!mentorMaster || !mentorMaster.mentorUser) {
+    return null;
+  }
+
+  // Check that the mapped MentorMaster still belongs
+  // to this student's academic group.
+  const groupMatches =
+    normalize(mentorMaster.section) === normalize(studentMaster.section) &&
+    normalize(mentorMaster.group) === normalize(studentMaster.group) &&
+    Number(mentorMaster.semester) === Number(studentMaster.semester);
+
+  if (!groupMatches) {
+    return null;
+  }
+
+  const mentor = await Mentor.findOne({
+    _id: mentorMaster.mentorUser,
+    isActive: true,
+    isVerified: true,
+    roles: "MENTOR",
+  })
+    .select("_id name email employeeId")
+    .lean();
+
+  if (!mentor) {
+    return null;
+  }
+
+  if (
+    clean(mentorMaster.mentorEmail).toLowerCase() !==
+    clean(mentor.email).toLowerCase()
+  ) {
+    return null;
   }
 
   return {
+    mentor,
+    mentorMaster,
+  };
+};
+
+// ============================================================
+// SYNC STUDENT PROFILE FROM STUDENTMASTER
+// ============================================================
+
+const syncProfileFromMaster = async (userId) => {
+  // ----------------------------------------------------------
+  // 1. AUTH USER
+  // ----------------------------------------------------------
+
+  const student = await authRepository.findUserById(userId);
+
+  if (!student) {
+    return fail("Student account not found.");
+  }
+
+  const enrollmentNumber = getEnrollmentNumber(student);
+
+  if (!enrollmentNumber) {
+    return fail("Student enrollment number is missing.");
+  }
+
+  // ----------------------------------------------------------
+  // 2. STUDENTMASTER
+  // ----------------------------------------------------------
+
+  const master = await StudentMaster.findOne({
+    enrollmentNumber,
+    isActive: true,
+    isDeleted: false,
+  }).lean();
+
+  if (!master) {
+    return fail("StudentMaster record not found. Contact administration.");
+  }
+
+  if (master.isRegistered !== true) {
+    return fail("StudentMaster registration is not activated.");
+  }
+
+  // ----------------------------------------------------------
+  // 3. VALIDATE MASTER DETAILS
+  // ----------------------------------------------------------
+
+  const section = normalize(master.section);
+  const group = normalize(master.group);
+  const parentName = clean(master.parentName);
+  const parentMobileNumber = clean(master.parentMobileNumber);
+
+  if (
+    !section ||
+    !group ||
+    !master.institute ||
+    !master.program ||
+    !master.mentorGroup
+  ) {
+    return fail(
+      "Student academic details or mentor group mapping are incomplete.",
+    );
+  }
+
+  if (!parentName) {
+    return fail("Parent name is missing in StudentMaster.");
+  }
+
+  if (!/^[6-9]\d{9}$/.test(parentMobileNumber)) {
+    return fail("Valid registered parent mobile number is missing.");
+  }
+
+  // ----------------------------------------------------------
+  // 4. PRIMARY MENTOR ACCOUNT
+  // ----------------------------------------------------------
+
+  const mentorData = await resolvePrimaryMentor(master);
+
+  if (!mentorData) {
+    return fail("Primary Mentor account is not linked or verified yet.");
+  }
+
+  // ----------------------------------------------------------
+  // 5. PRESERVE EXISTING ACCOUNT HOLD
+  // ----------------------------------------------------------
+
+  const existing = await StudentProfile.findOne({
+    user: student._id,
+  }).lean();
+
+  const now = new Date();
+
+  // Use an actual enum value from studentConstants.
+  // Avoid saving an unknown status.
+  const completedProfileStatus =
+    PROFILE_STATUS.COMPLETED ??
+    PROFILE_STATUS.COMPLETE ??
+    PROFILE_STATUS.VERIFIED ??
+    null;
+
+  const syncFields = {
+    mentor: mentorData.mentor._id,
+
+    mentorEmail: mentorData.mentor.email.toLowerCase(),
+
+    section,
+    group,
+
+    parentName,
+    parentMobileNumber,
+
+    // StudentMaster currently has no parentEmail.
+    // Preserve any existing verified value rather
+    // than inventing one.
+    parentEmail: existing?.parentEmail || "",
+
+    profileCompleted: true,
+    profileLocked: true,
+
+    lastProfileUpdatedAt: now,
+  };
+
+  if (completedProfileStatus) {
+    syncFields.profileStatus = completedProfileStatus;
+  } else {
+    // No assumption about PROFILE_STATUS enum values.
+    // Profile status remains at its existing/default
+    // schema value until constants are confirmed.
+    console.warn("PROFILE_STATUS completed enum not configured.");
+  }
+
+  // ----------------------------------------------------------
+  // 6. ATOMIC PROFILE UPSERT
+  // ----------------------------------------------------------
+
+  // Never overwrite accountStatus/holdReason here.
+  // Admin account HOLD must survive synchronization.
+  const profile = await StudentProfile.findOneAndUpdate(
+    {
+      user: student._id,
+    },
+    {
+      $set: syncFields,
+
+      $setOnInsert: {
+        user: student._id,
+      },
+    },
+    {
+      new: true,
+      upsert: true,
+      runValidators: true,
+      setDefaultsOnInsert: true,
+    },
+  );
+
+  return {
     success: true,
+    message: "Student profile synchronized from StudentMaster.",
     data: profile,
   };
 };
 
-// ============================================================================
-// Complete Student Profile
-// ============================================================================
-const completeProfile = async (userId, payload) => {
-  // ============================================================
-  // Validate Input
-  // ============================================================
+// ============================================================
+// GET STUDENT PROFILE
+// Automatically sync before returning it.
+// ============================================================
 
-  const validation = validateProfile(payload);
+const getProfile = async (userId) => {
+  const syncResult = await syncProfileFromMaster(userId);
 
-  if (!validation.isValid) {
-    return {
-      success: false,
-      errors: validation.errors,
-    };
+  if (!syncResult.success) {
+    return syncResult;
   }
 
-  if (!payload.mentorEmail) {
-    return {
-      success: false,
-      message: "Mentor email is required.",
-    };
+  // Only return the student's own profile.
+  const profile = await StudentProfile.findOne({
+    user: userId,
+  })
+    .populate("mentor", "name email employeeId designation availabilityStatus")
+    .lean();
+
+  return {
+    success: true,
+    message: "Student profile loaded successfully.",
+    data: profile,
+  };
+};
+
+// ============================================================
+// COMPLETE PROFILE
+// Backward-compatible endpoint name.
+// No manual payload fields are accepted.
+// ============================================================
+
+const completeProfile = async (userId, _payload) => {
+  // Ignore all client-submitted profile information.
+  // StudentMaster is the trusted source.
+  return syncProfileFromMaster(userId);
+};
+
+// ============================================================
+// UNLOCK PROFILE
+// Manual student profile editing is disabled.
+// ============================================================
+
+const unlockProfile = async (_userId, _mentorId) => {
+  return fail(
+    "Student profiles are managed through StudentMaster. Manual editing is disabled. Contact Admin to correct academic or parent details.",
+  );
+};
+
+// ============================================================
+// HOLD STUDENT ACCOUNT
+// ============================================================
+
+const holdAccount = async (userId, reason) => {
+  if (typeof reason !== "string" || !reason.trim()) {
+    return fail("Hold reason is required.");
   }
 
-  const mentorEmail = payload.mentorEmail.trim().toLowerCase();
-
-  if (!mentorEmail.endsWith("@gwa.amity.edu")) {
-    return {
-      success: false,
-      message: "Please enter a valid Amity mentor email.",
-    };
-  }
-  // ============================================================
-  // Check Profile Exists
-  // ============================================================
-
-  const profile = await profileRepository.findByUserId(userId);
-
-  if (!profile) {
-    return {
-      success: false,
-      message: "Student profile not found.",
-    };
-  }
-
-  // ============================================================
-  // Prevent Update If Locked
-  // ============================================================
-
-  if (profile.profileLocked) {
-    return {
-      success: false,
-      message: "Profile is locked. Please contact your mentor.",
-    };
-  }
-
-  // ============================================================
-  // Already Completed
-  // ============================================================
-
-  if (profile.profileCompleted) {
-    return {
-      success: false,
-      message: "Profile has already been completed.",
-    };
-  }
-
-  // ============================================================
-  // STEP 1 : Save Student Profile
-  // ============================================================
-
-  const updatedProfile = await profileRepository.updateProfile(userId, {
-    section: payload.section.toUpperCase(),
-    group: payload.group.toUpperCase(),
-    mentorEmail: mentorEmail,
-    parentName: payload.parentName.trim(),
-    parentEmail: payload.parentEmail.trim().toLowerCase(),
-    parentMobileNumber: payload.parentMobileNumber.toString().trim(),
+  const profile = await StudentProfile.findOne({
+    user: userId,
   });
 
-  // ============================================================
-  // Success
-  // ============================================================
-
-  return {
-    success: true,
-    message: "Profile completed successfully.",
-    data: updatedProfile,
-  };
-};
-
-// ============================================================================
-// Unlock Student Profile
-// ============================================================================
-const unlockProfile = async (userId, mentorId) => {
-  /**
-   * Check Profile Exists
-   */
-  const profile = await profileRepository.findByUserId(userId);
-
   if (!profile) {
-    return {
-      success: false,
-      message: "Student profile not found.",
-    };
+    return fail("Student profile not found.");
   }
 
-  /**
-   * Already Unlocked
-   */
-  if (!profile.profileLocked) {
-    return {
-      success: false,
-      message: "Profile is already unlocked.",
-    };
-  }
-
-  if (!profile.mentor) {
-    return {
-      success: false,
-      message: "No mentor assigned to this student.",
-    };
-  }
-
-  const profileMentorId = profile.mentor._id
-    ? profile.mentor._id.toString()
-    : profile.mentor.toString();
-
-  if (profileMentorId !== mentorId.toString()) {
-    return {
-      success: false,
-      message: "You are not authorized to unlock this student's profile.",
-    };
-  }
-
-  /**
-   * Unlock Profile
-   */
-  const updatedProfile = await profileRepository.unlockProfile(
-    userId,
-    mentorId,
-  );
-
-  if (!updatedProfile) {
-    return {
-      success: false,
-      message: "Unable to unlock profile.",
-    };
-  }
-
-  return {
-    success: true,
-    message: "Profile unlocked successfully.",
-    data: updatedProfile,
-  };
-};
-// ============================================================================
-// Hold Student Account
-// ============================================================================
-const holdAccount = async (userId, reason) => {
-  /**
-   * Validate Hold Reason
-   */
-  if (!reason || typeof reason !== "string" || !reason.trim()) {
-    return {
-      success: false,
-      message: "Hold reason is required.",
-    };
-  }
-
-  /**
-   * Check Profile Exists
-   */
-  const profile = await profileRepository.findByUserId(userId);
-
-  if (!profile) {
-    return {
-      success: false,
-      message: "Student profile not found.",
-    };
-  }
-
-  /**
-   * Already On Hold
-   */
   if (profile.accountStatus === ACCOUNT_STATUS.HOLD) {
-    return {
-      success: false,
-      message: "Student account is already on hold.",
-    };
+    return fail("Student account is already on hold.");
   }
 
-  /**
-   * Hold Account
-   */
-  const updatedProfile = await profileRepository.holdAccount(
-    userId,
-    reason.trim(),
+  const updated = await StudentProfile.findOneAndUpdate(
+    {
+      user: userId,
+      accountStatus: {
+        $ne: ACCOUNT_STATUS.HOLD,
+      },
+    },
+    {
+      $set: {
+        accountStatus: ACCOUNT_STATUS.HOLD,
+        holdReason: reason.trim(),
+      },
+    },
+    {
+      new: true,
+      runValidators: true,
+    },
   );
 
-  if (!updatedProfile) {
-    return {
-      success: false,
-      message: "Unable to hold student account.",
-    };
+  if (!updated) {
+    return fail("Unable to hold student account.");
   }
 
   return {
     success: true,
     message: "Student account placed on hold successfully.",
-    data: updatedProfile,
+    data: updated,
   };
 };
 
-// ============================================================================
-// Activate Student Account
-// ============================================================================
+// ============================================================
+// ACTIVATE HELD STUDENT ACCOUNT
+// ============================================================
+
 const activateAccount = async (userId) => {
-  /**
-   * Check Profile Exists
-   */
-  const profile = await profileRepository.findByUserId(userId);
+  const profile = await StudentProfile.findOne({
+    user: userId,
+  });
 
   if (!profile) {
-    return {
-      success: false,
-      message: "Student profile not found.",
-    };
+    return fail("Student profile not found.");
   }
 
-  /**
-   * Already Active
-   */
   if (profile.accountStatus === ACCOUNT_STATUS.ACTIVE) {
-    return {
-      success: false,
-      message: "Student account is already active.",
-    };
+    return fail("Student account is already active.");
   }
 
-  /**SF
-   * Activate Account
-   */
-  const updatedProfile = await profileRepository.activateAccount(userId);
+  const updated = await StudentProfile.findOneAndUpdate(
+    {
+      user: userId,
+      accountStatus: ACCOUNT_STATUS.HOLD,
+    },
+    {
+      $set: {
+        accountStatus: ACCOUNT_STATUS.ACTIVE,
+        holdReason: "",
+      },
+    },
+    {
+      new: true,
+      runValidators: true,
+    },
+  );
 
-  if (!updatedProfile) {
-    return {
-      success: false,
-      message: "Unable to activate student account.",
-    };
+  if (!updated) {
+    return fail("Unable to activate student account.");
   }
 
   return {
     success: true,
     message: "Student account activated successfully.",
-    data: updatedProfile,
+    data: updated,
   };
 };
 
-// ============================================================================
-// Export Service
-// ============================================================================
+// ============================================================
+// EXPORTS
+// ============================================================
 
 module.exports = Object.freeze({
   getProfile,
   completeProfile,
+  syncProfileFromMaster,
   unlockProfile,
   holdAccount,
   activateAccount,

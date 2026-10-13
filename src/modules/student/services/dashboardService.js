@@ -1,15 +1,46 @@
+"use strict";
 
 const dashboardRepository = require("../repositories/dashboardRepository");
+
 const dashboardDTO = require("../dtos/dashboard.dto");
 
-class DashboardService {
-  // ============================================================================
-// Student Dashboard
-// ============================================================================
+// ============================================================
+// STUDENT DASHBOARD SERVICE
+// ============================================================
 
+class DashboardService {
   async getDashboard(userId) {
+    if (!userId) {
+      throw new Error("Student authentication is required.");
+    }
+
+    // ========================================================
+    // 1. AUTHENTICATED USER
+    // ========================================================
+
+    const user = await dashboardRepository.getStudent(userId);
+
+    if (!user) {
+      throw new Error("Student account not found.");
+    }
+
+    // ========================================================
+    // 2. OFFICIAL STUDENTMASTER
+    // ========================================================
+
+    const studentMaster = await dashboardRepository.getStudentMaster(user);
+
+    if (!studentMaster) {
+      throw new Error(
+        "Your active registered StudentMaster record was not found. Please contact the university administrator.",
+      );
+    }
+
+    // ========================================================
+    // 3. FETCH DASHBOARD MODULES
+    // ========================================================
+
     const [
-      user,
       profile,
       statistics,
       currentOutpass,
@@ -19,8 +50,6 @@ class DashboardService {
       recentOutpasses,
       announcements,
     ] = await Promise.all([
-      dashboardRepository.getStudent(userId),
-
       dashboardRepository.getStudentProfile(userId),
 
       dashboardRepository.getDashboardStatistics(userId),
@@ -38,38 +67,22 @@ class DashboardService {
       dashboardRepository.getAnnouncements(),
     ]);
 
-    // ============================================================================
-// User Not Found
-// ============================================================================
-
-    if (!user) {
-      throw new Error("Student not found.");
-    }
-
-    // ============================================================================
-// Profile Not Created Yet
-// ============================================================================
-
-    if (!profile) {
-      throw new Error("Student profile not found.");
-    }
-
-    // ============================================================================
-// DTO Response
-// ============================================================================
+    // ========================================================
+    // 4. RESPONSE
+    // No profile completion/lock prerequisite.
+    // ========================================================
 
     return dashboardDTO({
       user,
+      studentMaster,
       profile,
-      currentOutpass,
       statistics,
+      currentOutpass,
       recentActivities,
       notifications,
-      announcements,
-
       unreadNotificationCount: unreadCount,
-
       recentOutpasses,
+      announcements,
     });
   }
 }

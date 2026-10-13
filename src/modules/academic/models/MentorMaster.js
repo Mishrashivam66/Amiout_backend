@@ -153,6 +153,18 @@ const mentorMasterSchema = new mongoose.Schema(
     // RECORD STATUS
     // ==========================================
 
+    availabilityStatus: {
+      type: String,
+      enum: ["AVAILABLE", "UNAVAILABLE"],
+      default: "AVAILABLE",
+      index: true,
+    },
+
+    availabilityUpdatedAt: {
+      type: Date,
+      default: null,
+    },
+
     isActive: {
       type: Boolean,
       default: true,

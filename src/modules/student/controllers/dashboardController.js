@@ -1,24 +1,36 @@
+"use strict";
+
+const asyncHandler = require("express-async-handler");
 
 const dashboardService = require("../services/dashboardService");
 
-const getDashboard = async (req, res, next) => {
-  try {
-    const dashboard = await dashboardService.getDashboard(req.user._id);
+// ============================================================
+// GET STUDENT DASHBOARD
+// GET /student/dashboard
+// ============================================================
 
-    return res.status(200).json({
-      success: true,
-      message: "Dashboard fetched successfully.",
-      data: dashboard,
-    });
-  } catch (error) {
-    console.error("Dashboard Error:", error);
+const getDashboard = asyncHandler(async (req, res) => {
+  const studentId = req.user?._id || req.user?.id;
 
-    return res.status(500).json({
+  if (!studentId) {
+    return res.status(401).json({
       success: false,
-      message: error.message,
+      message: "Student authentication required.",
     });
   }
-};
+
+  const dashboard = await dashboardService.getDashboard(studentId);
+
+  return res.status(200).json({
+    success: true,
+    message: "Dashboard fetched successfully.",
+    data: dashboard,
+  });
+});
+
+// ============================================================
+// EXPORT
+// ============================================================
 
 module.exports = {
   getDashboard,

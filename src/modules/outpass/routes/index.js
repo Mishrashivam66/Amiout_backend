@@ -1,14 +1,14 @@
-const express = require("express");
+"use strict";
 
+const express = require("express");
 const router = express.Router();
 
 const outpassRoutes = require("./outpassRoutes");
 const securityRoutes = require("./securityRoutes");
+const parentApprovalRoutes = require("./parentApprovalRoutes");
 
-// Student / Mentor Outpass Routes
 router.use("/", outpassRoutes);
-
-// Security Verification Routes
 router.use("/security", securityRoutes);
+router.use("/parent", parentApprovalRoutes);
 
 module.exports = router;

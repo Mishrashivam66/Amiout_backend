@@ -1,5 +1,5 @@
 "use strict";
-const mappingService = require("./mapping.service");
+const { runAutomaticMapping } = require("./autoMapping.service");
 const Mentor = require("../../auth/models/Mentor");
 const MentorMaster = require("../models/MentorMaster");
 
@@ -470,44 +470,21 @@ const importMentors = async (records = []) => {
   // AUTOMATIC MAPPING AFTER FACULTY IMPORT / UPDATE
   // ============================================================
 
+  // ============================================================
+  // AUTOMATIC MAPPING AFTER FACULTY IMPORT / UPDATE
+  // ============================================================
+
   let mentorMapping = {
     triggered: false,
     success: null,
     mapped: 0,
     failed: 0,
     errors: [],
+    message: "No new or updated faculty assignments.",
   };
 
   if (importedMentors.length > 0 || updatedMentors.length > 0) {
-    try {
-      const result = await mappingService.generateMapping();
-
-      mentorMapping = {
-        triggered: true,
-        success: result.success,
-        mapped: result.mapped,
-        failed: result.failed,
-        errors: result.errors,
-      };
-
-      console.log(
-        `Faculty import mapping: ${result.mapped} mapped, ${result.failed} failed.`,
-      );
-    } catch (error) {
-      console.error("Automatic faculty mapping failed:", error);
-
-      mentorMapping = {
-        triggered: true,
-        success: false,
-        mapped: 0,
-        failed: 0,
-        errors: [
-          {
-            reason: error.message,
-          },
-        ],
-      };
-    }
+    mentorMapping = await runAutomaticMapping("FACULTY_IMPORT");
   }
 
   return {

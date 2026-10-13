@@ -1,9 +1,9 @@
 "use strict";
-const mappingService = require("./mapping.service");
+
 const studentRepository = require("../repositories/studentMaster.repository");
 const instituteRepository = require("../repositories/institute.repository");
 const programRepository = require("../repositories/program.repository");
-
+const { runAutomaticMapping } = require("./autoMapping.service");
 const { mapStudentRows } = require("../utils/studentExcelMapper");
 const { validateStudents } = require("../utils/studentValidator");
 
@@ -417,45 +417,26 @@ const importStudents = async (records = [], options = {}) => {
   // STEP 5.1: AUTOMATIC MENTOR MAPPING AFTER STUDENT IMPORT
   // ============================================================
 
+  // ============================================================
+  // AUTOMATIC MAPPING AFTER STUDENT IMPORT
+  // ============================================================
+
   let mentorMapping = {
     triggered: false,
     success: null,
     mapped: 0,
     failed: 0,
     errors: [],
+    message: "No new students imported.",
   };
 
   if (importedCount > 0) {
-    try {
-      const result = await mappingService.generateMapping();
-
-      mentorMapping = {
-        triggered: true,
-        success: result.success,
-        mapped: result.mapped,
-        failed: result.failed,
-        errors: result.errors,
-      };
-
-      console.log(
-        `Student import mapping: ${result.mapped} mapped, ${result.failed} failed.`,
-      );
-    } catch (error) {
-      console.error("Automatic student mapping failed:", error);
-
-      mentorMapping = {
-        triggered: true,
-        success: false,
-        mapped: 0,
-        failed: 0,
-        errors: [
-          {
-            reason: error.message,
-          },
-        ],
-      };
-    }
+    mentorMapping = await runAutomaticMapping("STUDENT_IMPORT");
   }
+
+  // ============================================================
+  // STEP 6: SUMMARY
+  // ============================================================
 
   // Step 6: Summary.
   const summary = {

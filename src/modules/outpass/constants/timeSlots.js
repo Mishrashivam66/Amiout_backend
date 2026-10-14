@@ -4,15 +4,35 @@
 // AMIOUT - OUTPASS TIME CONFIGURATION
 // All timings follow Indian Standard Time (IST).
 // ============================================================
-
+// Testing mode sirf development environment mein chalega.
+const OUTPASS_TEST_MODE =
+  process.env.NODE_ENV === "development" &&
+  process.env.OUTPASS_TEST_MODE === "true";
 // University outpass operating window.
-const APPLICATION_WINDOW = Object.freeze({
-  START_HOUR: 9,
-  START_MINUTE: 15,
 
-  END_HOUR: 17,
-  END_MINUTE: 15,
-});
+const APPLICATION_WINDOW = Object.freeze(
+  OUTPASS_TEST_MODE
+    ? {
+        START_HOUR: 0,
+        START_MINUTE: 0,
+        END_HOUR: 24,
+        END_MINUTE: 0,
+      }
+    : {
+        START_HOUR: 9,
+        START_MINUTE: 15,
+        END_HOUR: 17,
+        END_MINUTE: 15,
+      },
+);
+
+// const APPLICATION_WINDOW = Object.freeze({
+//   START_HOUR: 9,
+//   START_MINUTE: 15,
+
+//   END_HOUR: 17,
+//   END_MINUTE: 15,
+// });
 
 // Time between consecutive outpass slots.
 const SLOT_INTERVAL_MINUTES = 10;

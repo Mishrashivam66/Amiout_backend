@@ -185,6 +185,30 @@ const updateAvailability = asyncHandler(async (req, res) => {
 
   return res.status(result.success ? 200 : 400).json(result);
 });
+
+const getProfile = asyncHandler(async (req, res) => {
+  const mentorId = req.user?._id || req.user?.id;
+
+  if (!mentorId) {
+    return res.status(401).json({
+      success: false,
+      message: "Faculty authentication required.",
+    });
+  }
+
+  const result = await mentorDashboardService.getProfile(mentorId);
+
+  return res.status(result.success ? 200 : 404).json(result);
+});
+
+const getCoordinatorStudents = asyncHandler(async (req, res) => {
+  const facultyId = req.user?._id || req.user?.id;
+
+  const result = await mentorDashboardService.getCoordinatorStudents(facultyId);
+
+  return res.status(result.success ? 200 : 403).json(result);
+});
+
 module.exports = Object.freeze({
   getDashboard,
   getPendingRequests,
@@ -199,4 +223,6 @@ module.exports = Object.freeze({
   unlockStudent,
   updateProfile,
   updateAvailability,
+  getProfile,
+  getCoordinatorStudents,
 });

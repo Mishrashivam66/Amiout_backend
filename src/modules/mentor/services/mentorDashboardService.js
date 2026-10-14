@@ -3,7 +3,7 @@
 const outpassRepository = require("../../outpass/repositories/outpassRepository");
 const { getStudentsForRole } = require("./facultyStudentsService");
 const profileRepository = require("../../student/repositories/profileRepository");
-
+const { getFacultyDashboardStats } = require("./facultyDashboardStatsService");
 const { OUTPASS_STATUS } = require("../../outpass/constants/outpassStatus");
 
 const Mentor = require("../../auth/models/Mentor");
@@ -61,36 +61,20 @@ const isAssignmentActive = (assignment, now) => {
 // DASHBOARD
 // ============================================================
 
+// ============================================================
+// MENTOR DASHBOARD
+// ============================================================
+
 const getDashboard = async (mentorId) => {
-  const totalStudents = await profileRepository.countStudentsByMentor(mentorId);
+  return getFacultyDashboardStats(mentorId, "MENTOR");
+};
 
-  const pending = await outpassRepository.countPendingForMentor(mentorId);
+// ============================================================
+// COORDINATOR DASHBOARD
+// ============================================================
 
-  const approved = await outpassRepository.countMentorByStatus(
-    mentorId,
-    OUTPASS_STATUS.APPROVED,
-  );
-
-  const rejected = await outpassRepository.countMentorByStatus(
-    mentorId,
-    OUTPASS_STATUS.REJECTED,
-  );
-
-  const recentRequests = await outpassRepository.findRecentForMentor(
-    mentorId,
-    5,
-  );
-
-  return {
-    success: true,
-    data: {
-      totalStudents,
-      pendingOutpasses: pending,
-      approvedToday: approved,
-      rejectedToday: rejected,
-      recentRequests,
-    },
-  };
+const getCoordinatorDashboard = async (facultyId) => {
+  return getFacultyDashboardStats(facultyId, "COORDINATOR");
 };
 
 // ============================================================
@@ -489,4 +473,5 @@ module.exports = Object.freeze({
   updateProfile,
   updateAvailability,
   getCoordinatorStudents,
+  getCoordinatorDashboard,
 });

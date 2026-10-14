@@ -1,28 +1,54 @@
+"use strict";
+
 const asyncHandler = require("express-async-handler");
 
 const mentorDashboardService = require("../services/mentorDashboardService");
 
 const outpassService = require("../../outpass/services");
 
-// ============================================================================
-// Mentor Dashboard
-// ============================================================================
-const getDashboard = asyncHandler(async (req, res) => {
-  const result = await mentorDashboardService.getDashboard(req.user.id);
+// ============================================================
+// HELPERS
+// ============================================================
 
-  return res.status(200).json(result);
+const getFacultyId = (req) => req.user?._id || req.user?.id;
+
+const sendServiceResult = (res, result, failureStatus = 403) => {
+  return res.status(result?.success ? 200 : failureStatus).json(result);
+};
+
+// ============================================================
+// MENTOR DASHBOARD
+// ============================================================
+
+const getDashboard = asyncHandler(async (req, res) => {
+  const result = await mentorDashboardService.getDashboard(getFacultyId(req));
+
+  return sendServiceResult(res, result);
 });
 
-// ============================================================================
-// Pending Requests
-// ============================================================================
+// ============================================================
+// COORDINATOR DASHBOARD
+// ============================================================
+
+const getCoordinatorDashboard = asyncHandler(async (req, res) => {
+  const result = await mentorDashboardService.getCoordinatorDashboard(
+    getFacultyId(req),
+  );
+
+  return sendServiceResult(res, result);
+});
+
+// ============================================================
+// MENTOR PENDING OUTPASSES
+// ============================================================
+
 const getPendingRequests = asyncHandler(async (req, res) => {
   const page = Number(req.query.page) || 1;
   const limit = Number(req.query.limit) || 10;
   const search = req.query.search || "";
 
   const result = await mentorDashboardService.getPendingRequests(
-    req.user.id,
+    getFacultyId(req),
     page,
     limit,
     search,
@@ -31,16 +57,16 @@ const getPendingRequests = asyncHandler(async (req, res) => {
   return res.status(200).json(result);
 });
 
-// ============================================================================
-// Approved Requests
-// ============================================================================
+// ============================================================
+// MENTOR APPROVED OUTPASSES
+// ============================================================
+
 const getApprovedRequests = asyncHandler(async (req, res) => {
   const page = Number(req.query.page) || 1;
-
   const limit = Number(req.query.limit) || 10;
 
   const result = await mentorDashboardService.getApprovedRequests(
-    req.user.id,
+    getFacultyId(req),
     page,
     limit,
   );
@@ -48,16 +74,16 @@ const getApprovedRequests = asyncHandler(async (req, res) => {
   return res.status(200).json(result);
 });
 
-// ============================================================================
-// Rejected Requests
-// ============================================================================
+// ============================================================
+// MENTOR REJECTED OUTPASSES
+// ============================================================
+
 const getRejectedRequests = asyncHandler(async (req, res) => {
   const page = Number(req.query.page) || 1;
-
   const limit = Number(req.query.limit) || 10;
 
   const result = await mentorDashboardService.getRejectedRequests(
-    req.user.id,
+    getFacultyId(req),
     page,
     limit,
   );
@@ -65,58 +91,82 @@ const getRejectedRequests = asyncHandler(async (req, res) => {
   return res.status(200).json(result);
 });
 
-// ============================================================================
-// Approve Outpass
-// ============================================================================
+// ============================================================
+// APPROVE OUTPASS
+// Existing mentor approval logic preserved.
+// ============================================================
+
 const approveOutpass = asyncHandler(async (req, res) => {
   const result = await outpassService.approveOutpass(
-    req.user.id,
+    getFacultyId(req),
     req.params.outpassId,
     req.body.remark,
   );
 
-  const statusCode = result.success ? 200 : 400;
-
-  return res.status(statusCode).json(result);
+  return sendServiceResult(res, result, 400);
 });
 
-// ============================================================================
-// Reject Outpass
-// ============================================================================
+// ============================================================
+// REJECT OUTPASS
+// Existing mentor rejection logic preserved.
+// ============================================================
+
 const rejectOutpass = asyncHandler(async (req, res) => {
   const result = await outpassService.rejectOutpass(
-    req.user.id,
+    getFacultyId(req),
     req.params.outpassId,
     req.body.remark,
   );
 
-  const statusCode = result.success ? 200 : 400;
-
-  return res.status(statusCode).json(result);
+  return sendServiceResult(res, result, 400);
 });
+
+// ============================================================
+// MENTOR STUDENTS
+// ============================================================
+
 const getStudents = asyncHandler(async (req, res) => {
-  const result = await mentorDashboardService.getStudents(req.user.id);
+  const result = await mentorDashboardService.getStudents(getFacultyId(req));
 
-  return res.status(200).json(result);
+  return sendServiceResult(res, result);
 });
+
+// ============================================================
+// COORDINATOR STUDENTS
+// ============================================================
+
+const getCoordinatorStudents = asyncHandler(async (req, res) => {
+  const result = await mentorDashboardService.getCoordinatorStudents(
+    getFacultyId(req),
+  );
+
+  return sendServiceResult(res, result);
+});
+
+// ============================================================
+// STUDENT DETAILS
+// ============================================================
+
 const getStudentDetails = asyncHandler(async (req, res) => {
   const result = await mentorDashboardService.getStudentDetails(
-    req.user.id,
+    getFacultyId(req),
     req.params.studentId,
   );
 
   return res.status(200).json(result);
 });
-// ============================================================================
-// Export Controller
-// ============================================================================
+
+// ============================================================
+// MENTOR HISTORY
+// ============================================================
+
 const getHistory = asyncHandler(async (req, res) => {
   const page = Number(req.query.page) || 1;
   const limit = Number(req.query.limit) || 10;
   const search = req.query.search || "";
 
   const result = await mentorDashboardService.getHistory(
-    req.user.id,
+    getFacultyId(req),
     page,
     limit,
     search,
@@ -124,105 +174,110 @@ const getHistory = asyncHandler(async (req, res) => {
 
   return res.status(200).json(result);
 });
-// ============================================================================
-// Outpass Details
-// ============================================================================
+
+// ============================================================
+// OUTPASS DETAILS
+// ============================================================
 
 const getOutpassDetails = asyncHandler(async (req, res) => {
   const result = await mentorDashboardService.getOutpassDetails(
-    req.user.id,
+    getFacultyId(req),
     req.params.outpassId,
   );
 
   return res.status(200).json(result);
 });
 
-// ============================================================================
-// Unlock Student Profile
-// ============================================================================
+// ============================================================
+// LEGACY UNLOCK STUDENT
+// Preserved for existing integrations.
+// ============================================================
+
 const unlockStudent = asyncHandler(async (req, res) => {
   const result = await mentorDashboardService.unlockStudent(
-    req.user.id,
+    getFacultyId(req),
     req.params.studentId,
   );
 
-  const statusCode = result.success ? 200 : 400;
-
-  return res.status(statusCode).json(result);
+  return sendServiceResult(res, result, 400);
 });
 
-const updateProfile = async (req, res, next) => {
-  try {
-    const result = await mentorDashboardService.updateProfile(
-      req.user.id,
-      req.body,
-    );
+// ============================================================
+// LEGACY UPDATE PROFILE
+// ============================================================
 
-    res.status(200).json({
-      success: true,
-      data: result,
-    });
-  } catch (err) {
-    console.error("FULL ERROR:", err);
-    console.error(err.stack);
+const updateProfile = asyncHandler(async (req, res) => {
+  const result = await mentorDashboardService.updateProfile(
+    getFacultyId(req),
+    req.body,
+  );
 
-    res.status(500).json({
-      success: false,
-      message: err.message,
-    });
-  }
-};
+  return res.status(200).json({
+    success: true,
+    data: result,
+  });
+});
 
-// ============================================================================
-// Update Mentor Availability
-// ============================================================================
+// ============================================================
+// UPDATE FACULTY AVAILABILITY
+// ============================================================
 
 const updateAvailability = asyncHandler(async (req, res) => {
   const result = await mentorDashboardService.updateAvailability(
-    req.user.id,
+    getFacultyId(req),
     req.body.availabilityStatus,
   );
 
-  return res.status(result.success ? 200 : 400).json(result);
+  return sendServiceResult(res, result, 400);
 });
 
-const getProfile = asyncHandler(async (req, res) => {
-  const mentorId = req.user?._id || req.user?.id;
+// ============================================================
+// GET OFFICIAL FACULTY PROFILE
+// ============================================================
 
-  if (!mentorId) {
+const getProfile = asyncHandler(async (req, res) => {
+  const facultyId = getFacultyId(req);
+
+  if (!facultyId) {
     return res.status(401).json({
       success: false,
       message: "Faculty authentication required.",
     });
   }
 
-  const result = await mentorDashboardService.getProfile(mentorId);
+  const result = await mentorDashboardService.getProfile(facultyId);
 
-  return res.status(result.success ? 200 : 404).json(result);
+  return sendServiceResult(res, result, 404);
 });
 
-const getCoordinatorStudents = asyncHandler(async (req, res) => {
-  const facultyId = req.user?._id || req.user?.id;
-
-  const result = await mentorDashboardService.getCoordinatorStudents(facultyId);
-
-  return res.status(result.success ? 200 : 403).json(result);
-});
+// ============================================================
+// EXPORTS
+// ============================================================
 
 module.exports = Object.freeze({
+  // Dashboards
   getDashboard,
+  getCoordinatorDashboard,
+
+  // Requests
   getPendingRequests,
   getApprovedRequests,
   getRejectedRequests,
   approveOutpass,
   rejectOutpass,
+
+  // Students
   getStudents,
+  getCoordinatorStudents,
   getStudentDetails,
+  unlockStudent,
+
+  // History and details
   getHistory,
   getOutpassDetails,
-  unlockStudent,
+
+  // Faculty profile
+  getProfile,
   updateProfile,
   updateAvailability,
-  getProfile,
-  getCoordinatorStudents,
 });

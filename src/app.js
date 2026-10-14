@@ -27,6 +27,8 @@ const studentRoutes = require("./modules/student/routes");
 
 const mentorRoutes = require("./modules/mentor/routes");
 
+const coordinatorRoutes = require("./modules/mentor/routes/coordinatorRoutes");
+
 const { academicRoutes } = require("./modules/academic");
 
 const adminRoutes = require("./modules/admin");
@@ -99,7 +101,7 @@ app.use("/api/v1/auth/admin", adminAuthRoutes);
 app.use("/api/v1/student", studentRoutes);
 
 app.use("/api/v1/mentor", mentorRoutes);
-
+app.use("/api/v1/coordinator", coordinatorRoutes);
 // ==========================================
 // ACADEMIC & ADMIN ROUTES
 // ==========================================

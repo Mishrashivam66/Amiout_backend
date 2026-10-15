@@ -288,6 +288,88 @@ const getAcademicContext = async (studentMaster) => {
     return null;
   }
 
+  console.log("AMIOUT ACADEMIC MAPPING CHECK:", {
+    instituteMatches:
+      sameId(program.institute, institute._id) &&
+      sameId(group.institute, institute._id),
+
+    programMatches: sameId(group.program, program._id),
+
+    primaryMentorMatches: sameId(
+      group.primaryMentor,
+      studentMaster.primaryMentor,
+    ),
+
+    backupMentorMatches: sameId(group.backupMentor, studentMaster.backupMentor),
+
+    semesterMatches: Number(group.semester) === Number(studentMaster.semester),
+
+    sectionMatches:
+      normalize(group.section) === normalize(studentMaster.section),
+
+    groupMatches: normalize(group.groupName) === normalize(studentMaster.group),
+
+    batchMatches: normalize(group.batch) === normalize(studentMaster.batch),
+
+    groupActive: group.isActive === true,
+    groupNotDeleted: group.isDeleted !== true,
+
+    scopeInputsPresent: Boolean(
+      institute.code &&
+      program.code &&
+      program.department &&
+      studentMaster.semester &&
+      studentMaster.section &&
+      studentMaster.group,
+    ),
+  });
+  console.log("AMIOUT SCOPE FIELDS:", {
+    hasInstituteCode: Boolean(institute?.code),
+    hasProgramCode: Boolean(program?.code),
+    hasDepartment: Boolean(program?.department),
+    hasSemester: Boolean(studentMaster?.semester),
+    hasSection: Boolean(studentMaster?.section),
+    hasGroup: Boolean(studentMaster?.group),
+  });
+
+  const buildScopes = ({ institute, program, studentMaster }) => {
+    const instituteCode = normalizeScope(institute?.code);
+    const programCode = normalizeScope(program?.code);
+    const departmentCode = normalizeScope(program?.department);
+
+    const semester = Number(studentMaster?.semester);
+    const section = normalizeScope(studentMaster?.section);
+    const group = normalizeScope(studentMaster?.group);
+
+    if (
+      !instituteCode ||
+      !programCode ||
+      !Number.isInteger(semester) ||
+      semester <= 0 ||
+      !section ||
+      !group
+    ) {
+      return null;
+    }
+
+    return {
+      instituteCode,
+      programCode,
+      departmentCode,
+      semester,
+      section,
+      group,
+
+      mentor: `${instituteCode}/${programCode}/${semester}/${section}/${group}`,
+
+      coordinator: `${instituteCode}/${programCode}/${semester}/${section}`,
+
+      hod: departmentCode ? `${instituteCode}/${departmentCode}` : null,
+
+      hoi: instituteCode,
+    };
+  };
+  // Generate authorized academic scopes
   const scopes = buildScopes({
     institute,
     program,

@@ -223,6 +223,12 @@ const updateProfile = asyncHandler(async (req, res) => {
 // ============================================================
 
 const updateAvailability = async (mentorId, availabilityStatus) => {
+  const startedAt = Date.now();
+
+  const logStep = (step) => {
+    console.log(`[FACULTY AVAILABILITY] ${step} | ${Date.now() - startedAt}ms`);
+  };
+
   const nextStatus = String(availabilityStatus || "")
     .trim()
     .toUpperCase();
@@ -234,7 +240,12 @@ const updateAvailability = async (mentorId, availabilityStatus) => {
     };
   }
 
+  logStep("Starting availability update");
+
+  // 1. Find mentor
   const mentor = await Mentor.findById(mentorId);
+
+  logStep("Mentor lookup completed");
 
   if (!mentor) {
     return {
@@ -250,44 +261,44 @@ const updateAvailability = async (mentorId, availabilityStatus) => {
     };
   }
 
-  // ----------------------------------------------------------
-  // Update the official faculty availability.
-  // ----------------------------------------------------------
-
+  // 2. Save status
   const now = new Date();
 
   mentor.availabilityStatus = nextStatus;
   mentor.availabilityUpdatedAt = now;
 
+  logStep("Saving faculty availability");
+
   await mentor.save();
 
-  // ----------------------------------------------------------
-  // AVAILABLE
-  //
-  // Do not pull previously reassigned requests back.
-  // ----------------------------------------------------------
+  logStep("Faculty availability saved");
 
+  // 3. Available
   if (nextStatus === "AVAILABLE") {
     return {
       success: true,
       message: "Faculty marked as AVAILABLE.",
       data: {
         availabilityStatus: mentor.availabilityStatus,
+
         availabilityUpdatedAt: mentor.availabilityUpdatedAt,
+
         reassignment: null,
       },
     };
   }
 
-  // ----------------------------------------------------------
-  // UNAVAILABLE
-  //
-  // Reconcile ALL remaining PENDING requests.
-  // Calling UNAVAILABLE again can retry unresolved work.
-  // ----------------------------------------------------------
-
+  // 4. Unavailable: reassign pending requests
   try {
+    logStep("Starting pending reassignment");
+
     const summary = await reassignPendingOutpasses(mentor._id);
+
+    logStep("Pending reassignment completed");
+
+    if (!summary || typeof summary !== "object") {
+      throw new Error("Reassignment returned an invalid result.");
+    }
 
     const complete = summary.unresolved === 0 && summary.skipped === 0;
 
@@ -295,32 +306,38 @@ const updateAvailability = async (mentorId, availabilityStatus) => {
       success: true,
 
       message: complete
-        ? "Faculty marked as UNAVAILABLE. Pending outpass reassignment processed."
-        : "Faculty marked as UNAVAILABLE, but some pending outpasses require reassignment review.",
+        ? "Faculty marked as UNAVAILABLE. Pending reassignment completed."
+        : "Faculty marked as UNAVAILABLE. Some pending requests require review.",
 
       data: {
         availabilityStatus: mentor.availabilityStatus,
+
         availabilityUpdatedAt: mentor.availabilityUpdatedAt,
+
         reassignmentComplete: complete,
+
         reassignment: summary,
       },
     };
   } catch (error) {
-    console.error("Availability reassignment failed:", error.message);
+    logStep("Pending reassignment failed");
 
-    // Availability has already been saved successfully.
-    // Report the incomplete reassignment explicitly.
+    console.error("[FACULTY REASSIGNMENT ERROR]", error);
+
     return {
       success: true,
+
       message:
-        "Faculty marked as UNAVAILABLE, but automatic reassignment failed. Administrative review or retry is required.",
+        "Faculty marked as UNAVAILABLE, but pending reassignment requires retry or administrative review.",
 
       data: {
         availabilityStatus: mentor.availabilityStatus,
+
         availabilityUpdatedAt: mentor.availabilityUpdatedAt,
+
         reassignmentComplete: false,
+
         reassignment: null,
-        reassignmentError: error.message,
       },
     };
   }

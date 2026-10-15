@@ -1,49 +1,194 @@
+"use strict";
+
+// ============================================================
+// HELPERS
+// ============================================================
+
+const getId = (value) => {
+  if (!value) return null;
+
+  if (value._id) {
+    return String(value._id);
+  }
+
+  return String(value);
+};
+
+const getValue = (value) => {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  return value;
+};
+
+const getFaculty = (faculty) => {
+  if (!faculty) return null;
+
+  // Faculty ObjectId may be present without populated data.
+  // Never substitute the assigned mentor's name.
+  const isPopulated =
+    typeof faculty === "object" && typeof faculty.name === "string";
+
+  return {
+    id: getId(faculty),
+
+    name: isPopulated ? faculty.name : null,
+
+    designation: isPopulated ? faculty.designation || null : null,
+
+    email: isPopulated ? faculty.email || null : null,
+  };
+};
+
+const getParentDecision = (decision) => ({
+  status: decision?.status || "PENDING",
+
+  method: decision?.method || null,
+
+  decidedAt: decision?.decidedAt || null,
+
+  callOutcome: decision?.callOutcome || null,
+
+  callVerifiedAt: decision?.callVerifiedAt || null,
+});
+
+// ============================================================
+// OUTPASS DTO
+// ============================================================
 
 const outpassDTO = (outpass) => {
   if (!outpass) return null;
 
+  // ==========================================================
+  // ACTUAL APPROVING FACULTY
+  // ==========================================================
+
+  const approvingFaculty = getFaculty(outpass.approvedByFaculty);
+
+  const facultyApprovalStatus =
+    outpass.approvedByFaculty && outpass.approvedAt
+      ? "APPROVED"
+      : outpass.status === "REJECTED"
+        ? "REJECTED"
+        : "PENDING";
+
   return {
-    id: outpass._id,
+    // ========================================================
+    // IDENTIFICATION
+    // ========================================================
+
+    id: getId(outpass._id),
 
     outpassId: outpass.outpassId,
 
     status: outpass.status,
 
+    // ========================================================
+    // STUDENT INFORMATION
+    // ========================================================
+
     student: {
-      id:
-        typeof outpass.student === "object"
-          ? outpass.student?._id
-          : outpass.student || null,
+      id: getId(outpass.student),
 
-      name: outpass.studentName,
+      name: getValue(outpass.studentName),
 
-      enrollmentNumber: outpass.enrollmentNumber,
+      enrollmentNumber: getValue(outpass.enrollmentNumber),
 
-      course: outpass.course,
+      course: getValue(outpass.course),
 
-      branch: outpass.branch,
+      branch: getValue(outpass.branch),
 
-      semester: outpass.semester,
+      semester: getValue(outpass.semester),
+
+      section: getValue(outpass.section),
+
+      group: getValue(outpass.group),
     },
 
-    mentor:
-      outpass.mentor && typeof outpass.mentor === "object"
-        ? {
-            id: outpass.mentor._id,
-            name: outpass.mentor.name,
-            email: outpass.mentor.email,
-          }
-        : outpass.mentor
-          ? {
-              id: outpass.mentor,
-            }
-          : null,
+    // Flat fields for existing Security Dashboard.
+    studentName: getValue(outpass.studentName),
+
+    enrollmentNumber: getValue(outpass.enrollmentNumber),
+
+    branch: getValue(outpass.branch),
+
+    course: getValue(outpass.course),
+
+    semester: getValue(outpass.semester),
+
+    section: getValue(outpass.section),
+
+    group: getValue(outpass.group),
+
+    // ========================================================
+    // ASSIGNED MENTOR
+    // Retained for compatibility.
+    // This is NOT necessarily the approving faculty.
+    // ========================================================
+
+    mentor: getFaculty(outpass.mentor),
+
+    assignedFaculty: getFaculty(outpass.assignedFaculty),
+
+    assignedRole: outpass.assignedRole || null,
+
+    // ========================================================
+    // PARENT INFORMATION
+    // ========================================================
 
     parent: {
-      name: outpass.parentName,
-      email: outpass.parentEmail,
-      mobileNumber: outpass.parentMobileNumber,
+      name: getValue(outpass.parentName),
+
+      email: getValue(outpass.parentEmail),
+
+      mobileNumber: getValue(outpass.parentMobileNumber),
     },
+
+    // ========================================================
+    // PARENT APPROVAL
+    // Never expose parent approval token/hash.
+    // ========================================================
+
+    parentDecision: getParentDecision(outpass.parentDecision),
+
+    parentApproval: getParentDecision(outpass.parentDecision),
+
+    // ========================================================
+    // UNIVERSITY / FACULTY APPROVAL
+    // Actual faculty who approved this outpass.
+    // ========================================================
+
+    facultyApproval: {
+      status: facultyApprovalStatus,
+
+      approvedBy: approvingFaculty,
+
+      approvedAuthorityRole: outpass.approvedAuthorityRole || null,
+
+      approvedAt: outpass.approvedAt || null,
+
+      remark: outpass.approvalRemark || "",
+    },
+
+    // Additional fields for API compatibility.
+    approvedByFaculty: approvingFaculty,
+
+    approvedAuthorityRole: outpass.approvedAuthorityRole || null,
+
+    approvedAt: outpass.approvedAt || null,
+
+    approvalRemark: outpass.approvalRemark || "",
+
+    // ========================================================
+    // LEGACY MENTOR REMARK
+    // ========================================================
+
+    mentorRemark: outpass.mentorRemark || null,
+
+    // ========================================================
+    // OUTPASS REQUEST
+    // ========================================================
 
     reason: outpass.reason,
 
@@ -53,37 +198,72 @@ const outpassDTO = (outpass) => {
 
     outTime: outpass.outTime,
 
-    expectedReturn: outpass.expectedReturn,
+    // Optional planned return time.
+    inTime: outpass.inTime ?? null,
 
-    mentorRemark: outpass.mentorRemark,
+    // Retained for old records.
+    expectedReturn: outpass.expectedReturn ?? null,
 
-    qrGenerated: outpass.qrGenerated,
+    // ========================================================
+    // QR DETAILS
+    // Never expose the raw QR token here.
+    // ========================================================
 
-    exitVerified: outpass.exitVerified,
+    qrGenerated: outpass.qrGenerated === true,
 
-    entryVerified: outpass.entryVerified,
+    qrGeneratedAt: outpass.qrGeneratedAt || null,
 
-    approvedAt: outpass.approvedAt,
+    qrValidFrom: outpass.qrValidFrom || null,
 
-    rejectedAt: outpass.rejectedAt,
+    qrExpiresAt: outpass.qrExpiresAt || null,
 
-    cancelledAt: outpass.cancelledAt,
+    qrRevokedAt: outpass.qrRevokedAt || null,
 
-    exitVerifiedAt: outpass.exitVerifiedAt,
+    // ========================================================
+    // SECURITY EXIT
+    // ========================================================
 
-    entryVerifiedAt: outpass.entryVerifiedAt,
+    exitVerified: outpass.exitVerified === true,
 
-    createdAt: outpass.createdAt,
+    exitVerifiedAt: outpass.exitVerifiedAt || null,
 
-    updatedAt: outpass.updatedAt,
+    // ========================================================
+    // SECURITY ENTRY
+    // ========================================================
+
+    entryVerified: outpass.entryVerified === true,
+
+    entryVerifiedAt: outpass.entryVerifiedAt || null,
+
+    // ========================================================
+    // OTHER TIMESTAMPS
+    // ========================================================
+
+    rejectedAt: outpass.rejectedAt || null,
+
+    cancelledAt: outpass.cancelledAt || null,
+
+    createdAt: outpass.createdAt || null,
+
+    updatedAt: outpass.updatedAt || null,
   };
 };
 
-// ============================================================================
-// List DTO
-// ============================================================================
+// ============================================================
+// OUTPASS LIST DTO
+// ============================================================
 
-const outpassListDTO = (outpasses = []) => outpasses.map(outpassDTO);
+const outpassListDTO = (outpasses = []) => {
+  if (!Array.isArray(outpasses)) {
+    return [];
+  }
+
+  return outpasses.map(outpassDTO);
+};
+
+// ============================================================
+// EXPORTS
+// ============================================================
 
 module.exports = {
   outpassDTO,

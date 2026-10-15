@@ -222,126 +222,44 @@ const updateProfile = asyncHandler(async (req, res) => {
 // UPDATE FACULTY AVAILABILITY
 // ============================================================
 
-const updateAvailability = async (mentorId, availabilityStatus) => {
-  const startedAt = Date.now();
+const updateAvailability = asyncHandler(async (req, res) => {
+  const facultyId = getFacultyId(req);
 
-  const logStep = (step) => {
-    console.log(`[FACULTY AVAILABILITY] ${step} | ${Date.now() - startedAt}ms`);
-  };
+  if (!facultyId) {
+    return res.status(401).json({
+      success: false,
+      message: "Faculty authentication required.",
+    });
+  }
 
-  const nextStatus = String(availabilityStatus || "")
+  const availabilityStatus = String(req.body?.availabilityStatus || "")
     .trim()
     .toUpperCase();
 
-  if (!["AVAILABLE", "UNAVAILABLE"].includes(nextStatus)) {
-    return {
+  if (!["AVAILABLE", "UNAVAILABLE"].includes(availabilityStatus)) {
+    return res.status(400).json({
       success: false,
       message: "Invalid availability status.",
-    };
+    });
   }
 
-  logStep("Starting availability update");
+  console.log("[AVAILABILITY CONTROLLER] Request received:", {
+    facultyId: String(facultyId),
+    availabilityStatus,
+  });
 
-  // 1. Find mentor
-  const mentor = await Mentor.findById(mentorId);
+  const result = await mentorDashboardService.updateAvailability(
+    facultyId,
+    availabilityStatus,
+  );
 
-  logStep("Mentor lookup completed");
+  console.log("[AVAILABILITY CONTROLLER] Service completed:", {
+    success: result?.success,
+    reassignmentComplete: result?.data?.reassignmentComplete,
+  });
 
-  if (!mentor) {
-    return {
-      success: false,
-      message: "Faculty account not found.",
-    };
-  }
-
-  if (mentor.isActive !== true || mentor.isVerified !== true) {
-    return {
-      success: false,
-      message: "Faculty account is inactive or unverified.",
-    };
-  }
-
-  // 2. Save status
-  const now = new Date();
-
-  mentor.availabilityStatus = nextStatus;
-  mentor.availabilityUpdatedAt = now;
-
-  logStep("Saving faculty availability");
-
-  await mentor.save();
-
-  logStep("Faculty availability saved");
-
-  // 3. Available
-  if (nextStatus === "AVAILABLE") {
-    return {
-      success: true,
-      message: "Faculty marked as AVAILABLE.",
-      data: {
-        availabilityStatus: mentor.availabilityStatus,
-
-        availabilityUpdatedAt: mentor.availabilityUpdatedAt,
-
-        reassignment: null,
-      },
-    };
-  }
-
-  // 4. Unavailable: reassign pending requests
-  try {
-    logStep("Starting pending reassignment");
-
-    const summary = await reassignPendingOutpasses(mentor._id);
-
-    logStep("Pending reassignment completed");
-
-    if (!summary || typeof summary !== "object") {
-      throw new Error("Reassignment returned an invalid result.");
-    }
-
-    const complete = summary.unresolved === 0 && summary.skipped === 0;
-
-    return {
-      success: true,
-
-      message: complete
-        ? "Faculty marked as UNAVAILABLE. Pending reassignment completed."
-        : "Faculty marked as UNAVAILABLE. Some pending requests require review.",
-
-      data: {
-        availabilityStatus: mentor.availabilityStatus,
-
-        availabilityUpdatedAt: mentor.availabilityUpdatedAt,
-
-        reassignmentComplete: complete,
-
-        reassignment: summary,
-      },
-    };
-  } catch (error) {
-    logStep("Pending reassignment failed");
-
-    console.error("[FACULTY REASSIGNMENT ERROR]", error);
-
-    return {
-      success: true,
-
-      message:
-        "Faculty marked as UNAVAILABLE, but pending reassignment requires retry or administrative review.",
-
-      data: {
-        availabilityStatus: mentor.availabilityStatus,
-
-        availabilityUpdatedAt: mentor.availabilityUpdatedAt,
-
-        reassignmentComplete: false,
-
-        reassignment: null,
-      },
-    };
-  }
-};
+  return res.status(result?.success ? 200 : 400).json(result);
+});
 
 // ============================================================
 // GET OFFICIAL FACULTY PROFILE

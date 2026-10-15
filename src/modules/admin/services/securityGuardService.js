@@ -1,3 +1,4 @@
+
 "use strict";
 
 const mongoose = require("mongoose");
@@ -14,7 +15,8 @@ const fail = (message) => ({
   message,
 });
 
-const clean = (value) => (typeof value === "string" ? value.trim() : "");
+const clean = (value) =>
+  typeof value === "string" ? value.trim() : "";
 
 const createSecurityGuard = async (adminId, data = {}) => {
   if (!mongoose.isValidObjectId(adminId)) {
@@ -34,13 +36,16 @@ const createSecurityGuard = async (adminId, data = {}) => {
     return fail("Guard name must contain 3 to 100 characters.");
   }
 
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+  if (
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+    email.length > 254
+  ) {
     return fail("Enter a valid email address.");
   }
 
   if (!/^[A-Z0-9_-]{3,30}$/.test(employeeId)) {
     return fail(
-      "Employee ID must be 3 to 30 characters using letters, numbers, underscore or hyphen.",
+      "Employee ID must be 3 to 30 characters using letters, numbers, underscore or hyphen."
     );
   }
 
@@ -54,7 +59,7 @@ const createSecurityGuard = async (adminId, data = {}) => {
     !/[^A-Za-z0-9]/.test(password)
   ) {
     return fail(
-      "Temporary password must contain 12 to 128 characters, including uppercase, lowercase, number and symbol.",
+      "Temporary password must contain 12 to 128 characters, including uppercase, lowercase, number and symbol."
     );
   }
 
@@ -124,7 +129,9 @@ const createSecurityGuard = async (adminId, data = {}) => {
     };
   } catch (error) {
     if (error.code === 11000) {
-      return fail("Email or Employee ID already exists. Use unique details.");
+      return fail(
+        "Email or Employee ID already exists. Use unique details."
+      );
     }
 
     throw error;

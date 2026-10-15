@@ -419,42 +419,98 @@ const updateProfile = async (mentorId, data) => {
 // ============================================================
 
 const updateAvailability = async (mentorId, availabilityStatus) => {
-  if (!["AVAILABLE", "UNAVAILABLE"].includes(availabilityStatus)) {
+  const nextStatus = String(availabilityStatus || "")
+    .trim()
+    .toUpperCase();
+
+  if (!["AVAILABLE", "UNAVAILABLE"].includes(nextStatus)) {
     return {
       success: false,
       message: "Invalid availability status.",
     };
   }
 
+  console.log("[AVAILABILITY] Looking up faculty");
+
   const mentor = await Mentor.findById(mentorId);
 
   if (!mentor) {
     return {
       success: false,
-      message: "Mentor not found.",
+      message: "Faculty account not found.",
     };
   }
 
   if (mentor.isActive !== true || mentor.isVerified !== true) {
     return {
       success: false,
-      message: "Faculty account is not active or verified.",
+      message: "Faculty account is inactive or unverified.",
     };
   }
 
-  mentor.availabilityStatus = availabilityStatus;
-  mentor.availabilityUpdatedAt = new Date();
+  const now = new Date();
+
+  mentor.availabilityStatus = nextStatus;
+  mentor.availabilityUpdatedAt = now;
+
+  console.log("[AVAILABILITY] Before mentor.save()");
 
   await mentor.save();
 
-  return {
-    success: true,
-    message: `Faculty marked as ${availabilityStatus}.`,
-    data: {
-      availabilityStatus: mentor.availabilityStatus,
-      availabilityUpdatedAt: mentor.availabilityUpdatedAt,
-    },
-  };
+  console.log("[AVAILABILITY] After mentor.save()");
+
+  console.log("[AVAILABILITY] Saved:", nextStatus);
+
+  if (nextStatus === "AVAILABLE") {
+    return {
+      success: true,
+      message: "Faculty marked as AVAILABLE.",
+      data: {
+        availabilityStatus: nextStatus,
+        availabilityUpdatedAt: now,
+        reassignment: null,
+      },
+    };
+  }
+
+  // Mentor is UNAVAILABLE.
+  // Transfer all pending assigned requests.
+  try {
+    console.log("[AVAILABILITY] Starting reassignment");
+
+    const summary = await reassignPendingOutpasses(mentor._id);
+
+    console.log("[AVAILABILITY] Reassignment completed", summary);
+
+    const complete = summary.unresolved === 0 && summary.skipped === 0;
+
+    return {
+      success: true,
+      message: complete
+        ? "Faculty marked as UNAVAILABLE. Pending reassignment completed."
+        : "Faculty marked as UNAVAILABLE. Some requests need reassignment review.",
+      data: {
+        availabilityStatus: nextStatus,
+        availabilityUpdatedAt: now,
+        reassignmentComplete: complete,
+        reassignment: summary,
+      },
+    };
+  } catch (error) {
+    console.error("[AVAILABILITY] Reassignment error:", error);
+
+    return {
+      success: true,
+      message:
+        "Faculty marked as UNAVAILABLE, but pending reassignment requires retry or administrative review.",
+      data: {
+        availabilityStatus: nextStatus,
+        availabilityUpdatedAt: now,
+        reassignmentComplete: false,
+        reassignment: null,
+      },
+    };
+  }
 };
 
 // ============================================================

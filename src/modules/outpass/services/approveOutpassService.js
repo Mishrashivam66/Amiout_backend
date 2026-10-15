@@ -4,20 +4,21 @@ const mongoose = require("mongoose");
 
 const Outpass = require("../models/Outpass");
 const Mentor = require("../../auth/models/Mentor");
-const MentorMaster = require("../../academic/models/MentorMaster");
 const StudentMaster = require("../../academic/models/StudentMaster");
-const Group = require("../../academic/models/Group");
 
 const { approvedEvent } = require("../utils/timelineHelper");
 const { OUTPASS_STATUS } = require("../constants/outpassStatus");
+
 const { createQRToken, getISTDay } = require("./qrService");
+
+const { resolveOutpassAuthority } = require("./outpassEscalationService");
 
 const {
   sendNotification,
 } = require("../../notification/service/notificationService");
 
 const {
-  NOTIFICATION_TYPES: SHARED_NOTIFICATION_TYPES,
+  NOTIFICATION_TYPES,
 } = require("../../../shared/types/notificationTypes");
 
 const {
@@ -25,13 +26,32 @@ const {
 } = require("../../notification/constants/notificationConstants");
 
 const { sendEmail } = require("../../auth/utils/email");
+
 const outpassApprovedTemplate = require("../templates/outpassApprovedTemplate");
+
+// ============================================================
+// CONSTANTS
+// ============================================================
+
+const ALLOWED_APPROVAL_ROLES = new Set([
+  "MENTOR",
+  "BACKUP_MENTOR",
+  "COORDINATOR",
+  "HOD",
+  "HOI",
+]);
+
+const ROLE_HIERARCHY = Object.freeze({
+  MENTOR: "MENTOR",
+  BACKUP_MENTOR: "MENTOR",
+  COORDINATOR: "COORDINATOR",
+  HOD: "HOD",
+  HOI: "HOI",
+});
 
 // ============================================================
 // HELPERS
 // ============================================================
-
-const ALLOWED_ROLES = new Set(["MENTOR", "BACKUP_MENTOR"]);
 
 const failure = (message) => ({
   success: false,
@@ -40,42 +60,189 @@ const failure = (message) => ({
 
 const getId = (value) => String(value?._id || value || "");
 
+const sameId = (a, b) => Boolean(getId(a)) && getId(a) === getId(b);
+
 const normalize = (value) =>
   String(value ?? "")
     .trim()
     .toUpperCase();
 
-const normalizeScope = (value) => normalize(value).replace(/\s+/g, "");
+const equalNumber = (a, b) => Number(a) === Number(b);
 
-// Scope example:
-// ASET/B.TECH-CSE/7/C/C2
-const matchesFacultyScope = (assignments, master) => {
-  const expected = [
-    normalizeScope(master.institute),
-    normalizeScope(master.program),
-    String(master.semester),
-    normalizeScope(master.section),
-    normalizeScope(master.group),
-  ].join("/");
-
-  // Fail closed if institute or program is missing.
-  if (!master.institute || !master.program) {
+const isFacultyAuthorized = (faculty, assignedRole, now) => {
+  if (
+    !faculty ||
+    faculty.isActive !== true ||
+    faculty.isVerified !== true ||
+    faculty.availabilityStatus !== "AVAILABLE"
+  ) {
     return false;
   }
 
-  return assignments.some(
-    (assignment) =>
-      assignment.role === "MENTOR" &&
-      assignment.scopeType === "GROUP" &&
-      normalizeScope(assignment.scopeId) === expected,
+  const requiredRole = ROLE_HIERARCHY[assignedRole];
+
+  if (!requiredRole) {
+    return false;
+  }
+
+  if (!faculty.hasRole(requiredRole)) {
+    return false;
+  }
+
+  const expectedScopeType = {
+    MENTOR: "GROUP",
+    COORDINATOR: "SECTION",
+    HOD: "DEPARTMENT",
+    HOI: "INSTITUTE",
+  }[requiredRole];
+
+  return faculty
+    .getActiveRoleAssignments(now)
+    .some(
+      (assignment) =>
+        assignment.role === requiredRole &&
+        assignment.scopeType === expectedScopeType,
+    );
+};
+
+// ============================================================
+// IST DATE RANGE
+// ============================================================
+
+const getISTDateRange = (date) => {
+  const dayKey = getISTDay(date);
+
+  if (typeof dayKey !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) {
+    return null;
+  }
+
+  const start = new Date(`${dayKey}T00:00:00+05:30`);
+
+  if (Number.isNaN(start.getTime())) {
+    return null;
+  }
+
+  return {
+    dayKey,
+    start,
+    end: new Date(start.getTime() + 86400000),
+  };
+};
+
+// ============================================================
+// PREVIOUS APPROVED OUTPASSES
+//
+// Includes historic records with outpassDayIST missing.
+// An approved/used trip continues to count even after
+// the student returns to campus.
+// ============================================================
+
+const getPreviousApprovedTrips = async ({
+  studentId,
+  currentOutpassId,
+  dayKey,
+  dayStart,
+  dayEnd,
+  session,
+}) => {
+  return Outpass.find({
+    student: studentId,
+
+    _id: {
+      $ne: currentOutpassId,
+    },
+
+    isDeleted: false,
+
+    $and: [
+      {
+        $or: [
+          {
+            outpassDayIST: dayKey,
+          },
+          {
+            outDate: {
+              $gte: dayStart,
+              $lt: dayEnd,
+            },
+            $or: [
+              { outpassDayIST: "" },
+              { outpassDayIST: null },
+              {
+                outpassDayIST: {
+                  $exists: false,
+                },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        $or: [
+          {
+            approvedAt: {
+              $type: "date",
+            },
+          },
+          {
+            dailyTripNumber: {
+              $in: [1, 2],
+            },
+          },
+          {
+            exitVerified: true,
+          },
+        ],
+      },
+    ],
+  })
+    .select(
+      "_id approvedAt dailyTripNumber " +
+        "exitVerified entryVerified " +
+        "exitVerifiedAt entryVerifiedAt",
+    )
+    .sort({
+      approvedAt: 1,
+    })
+    .session(session);
+};
+
+// ============================================================
+// CHECK COMPLETED EXIT / ENTRY CYCLE
+// ============================================================
+
+const isTripCycleCompleted = (trip) => {
+  if (
+    trip.exitVerified !== true ||
+    trip.entryVerified !== true ||
+    !trip.exitVerifiedAt ||
+    !trip.entryVerifiedAt
+  ) {
+    return false;
+  }
+
+  const exitTime = new Date(trip.exitVerifiedAt).getTime();
+
+  const entryTime = new Date(trip.entryVerifiedAt).getTime();
+
+  return (
+    Number.isFinite(exitTime) &&
+    Number.isFinite(entryTime) &&
+    entryTime > exitTime
   );
 };
 
 // ============================================================
-// APPROVE OUTPASS
+// MAIN APPROVAL SERVICE
+// Supports:
+// MENTOR -> BACKUP_MENTOR -> COORDINATOR -> HOD -> HOI
 // ============================================================
 
 const approveOutpass = async (facultyId, outpassId, remark = "") => {
+  // ==========================================================
+  // STEP 1 - VALIDATE INPUT
+  // ==========================================================
+
   if (
     !mongoose.isValidObjectId(facultyId) ||
     !mongoose.isValidObjectId(outpassId)
@@ -96,14 +263,14 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
 
   try {
     await session.withTransaction(async () => {
-      // Reset values if MongoDB retries the transaction.
+      // Reset on transaction retry.
       approvedId = null;
       errorMessage = null;
 
       const now = new Date();
 
       // ======================================================
-      // 1. FIND OUTPASS
+      // STEP 2 - LOAD OUTPASS
       // ======================================================
 
       const outpass = await Outpass.findOne({
@@ -122,21 +289,21 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
       }
 
       // ======================================================
-      // 2. CURRENT FACULTY AUTHORIZATION
+      // STEP 3 - CHECK ASSIGNED FACULTY AND ROLE
       // ======================================================
 
-      if (getId(outpass.assignedFaculty) !== String(facultyId)) {
+      if (!ALLOWED_APPROVAL_ROLES.has(outpass.assignedRole)) {
+        errorMessage = "Invalid assigned approval authority.";
+        return;
+      }
+
+      if (!sameId(outpass.assignedFaculty, facultyId)) {
         errorMessage = "This outpass is not assigned to your account.";
         return;
       }
 
-      if (!ALLOWED_ROLES.has(outpass.assignedRole)) {
-        errorMessage = "This authority role requires separate authorization.";
-        return;
-      }
-
       // ======================================================
-      // 3. PARENT CONSENT
+      // STEP 4 - PARENT APPROVAL
       // ======================================================
 
       if (outpass.isParentRejected()) {
@@ -150,40 +317,19 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
       }
 
       // ======================================================
-      // 4. FACULTY ACCOUNT
+      // STEP 5 - FACULTY ACCOUNT
       // ======================================================
 
       const faculty = await Mentor.findById(facultyId).session(session);
 
-      if (
-        !faculty ||
-        faculty.isActive !== true ||
-        faculty.isVerified !== true ||
-        faculty.availabilityStatus !== "AVAILABLE"
-      ) {
-        errorMessage = "Faculty is inactive, unverified or unavailable.";
-        return;
-      }
-
-      if (!faculty.hasRole("MENTOR")) {
-        errorMessage = "Faculty does not have the Mentor role.";
-        return;
-      }
-
-      const activeAssignments = faculty
-        .getActiveRoleAssignments(now)
-        .filter(
-          (assignment) =>
-            assignment.role === "MENTOR" && assignment.scopeType === "GROUP",
-        );
-
-      if (!activeAssignments.length) {
-        errorMessage = "Faculty has no active Mentor group authorization.";
+      if (!isFacultyAuthorized(faculty, outpass.assignedRole, now)) {
+        errorMessage =
+          "Faculty is unavailable or does not have an active authorized role.";
         return;
       }
 
       // ======================================================
-      // 5. STUDENT MASTER
+      // STEP 6 - STUDENT MASTER
       // ======================================================
 
       const studentMaster = await StudentMaster.findOne({
@@ -197,8 +343,12 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
         return;
       }
 
+      // ======================================================
+      // STEP 7 - VALIDATE STUDENT SNAPSHOT
+      // ======================================================
+
       if (
-        studentMaster.semester !== outpass.semester ||
+        !equalNumber(studentMaster.semester, outpass.semester) ||
         normalize(studentMaster.section) !== normalize(outpass.section) ||
         normalize(studentMaster.group) !== normalize(outpass.group)
       ) {
@@ -209,198 +359,81 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
 
       if (
         (outpass.academicInstitute &&
-          getId(studentMaster.institute) !==
-            getId(outpass.academicInstitute)) ||
+          !sameId(studentMaster.institute, outpass.academicInstitute)) ||
         (outpass.academicProgram &&
-          getId(studentMaster.program) !== getId(outpass.academicProgram))
+          !sameId(studentMaster.program, outpass.academicProgram))
       ) {
         errorMessage = "Student institute or program mapping mismatch.";
         return;
       }
 
       // ======================================================
-      // 6. STUDENT GROUP
+      // STEP 8 - RESOLVE CURRENT APPROVAL AUTHORITY
+      //
+      // This re-checks:
+      // - Primary Mentor availability
+      // - Backup Mentor availability
+      // - Coordinator availability and SECTION scope
+      // - HOD availability and DEPARTMENT scope
+      // - HOI availability and INSTITUTE scope
+      //
+      // Important: Resolve inside approval flow.
+      // A higher authority cannot bypass an available
+      // lower authority.
       // ======================================================
 
-      if (!studentMaster.mentorGroup) {
-        errorMessage = "Student group mapping is missing.";
-        return;
-      }
+      const authorityResult = await resolveOutpassAuthority({
+        studentMaster,
+        now,
+      });
 
-      const studentGroup = await Group.findOne({
-        _id: studentMaster.mentorGroup,
-        isActive: true,
-        isDeleted: false,
-      }).session(session);
-
-      if (!studentGroup) {
-        errorMessage = "Student group is inactive or missing.";
-        return;
-      }
-
-      if (
-        getId(studentGroup.institute) !== getId(studentMaster.institute) ||
-        getId(studentGroup.program) !== getId(studentMaster.program) ||
-        normalize(studentGroup.batch) !== normalize(studentMaster.batch) ||
-        studentGroup.semester !== studentMaster.semester ||
-        normalize(studentGroup.section) !== normalize(studentMaster.section) ||
-        normalize(studentGroup.groupName) !== normalize(studentMaster.group)
-      ) {
-        errorMessage = "Student group academic mapping mismatch.";
-        return;
-      }
-
-      // ======================================================
-      // 7. OFFICIAL MENTOR MAPPING
-      // ======================================================
-
-      const isBackup = outpass.assignedRole === "BACKUP_MENTOR";
-
-      const expectedMasterId = isBackup
-        ? studentGroup.backupMentor
-        : studentGroup.primaryMentor;
-
-      const mappedMasterId = isBackup
-        ? studentMaster.backupMentor
-        : studentMaster.primaryMentor;
-
-      if (
-        !expectedMasterId ||
-        !mappedMasterId ||
-        getId(expectedMasterId) !== getId(mappedMasterId)
-      ) {
-        errorMessage = "Student and Group mentor mappings are inconsistent.";
-        return;
-      }
-
-      const mappedMentor = await MentorMaster.findOne({
-        _id: mappedMasterId,
-        mentorUser: faculty._id,
-        isActive: true,
-        isDeleted: false,
-        availabilityStatus: "AVAILABLE",
-        roles: "MENTOR",
-      }).session(session);
-
-      if (!mappedMentor) {
-        errorMessage = "Faculty does not match the authorized MentorMaster.";
-        return;
-      }
-
-      if (
-        mappedMentor.semester !== studentMaster.semester ||
-        normalize(mappedMentor.section) !== normalize(studentMaster.section) ||
-        normalize(mappedMentor.course) !== normalize(outpass.course)
-      ) {
-        errorMessage = "Mentor academic details mismatch.";
-        return;
-      }
-
-      if (
-        !isBackup &&
-        normalize(mappedMentor.group) !== normalize(studentMaster.group)
-      ) {
-        errorMessage = "Primary mentor group mismatch.";
-        return;
-      }
-
-      if (
-        isBackup &&
-        normalize(mappedMentor.group) === normalize(studentMaster.group)
-      ) {
-        errorMessage = "Backup mentor must belong to a different group.";
-        return;
-      }
-
-      // ======================================================
-      // 8. VALIDATE FULL FACULTY SCOPE
-      // ======================================================
-
-      if (!matchesFacultyScope(activeAssignments, mappedMentor)) {
+      if (!authorityResult.success) {
         errorMessage =
-          "Faculty's active academic scope does not match MentorMaster.";
+          authorityResult.message || "Unable to verify approval hierarchy.";
         return;
       }
 
       // ======================================================
-      // 9. BACKUP MENTOR FALLBACK VALIDATION
+      // STEP 9 - VERIFY CORRECT FACULTY
       // ======================================================
 
-      if (isBackup) {
-        if (!studentMaster.primaryMentor) {
-          errorMessage = "Primary mentor mapping is missing.";
-          return;
-        }
-
-        const primaryMaster = await MentorMaster.findById(
-          studentMaster.primaryMentor,
-        ).session(session);
-
-        if (!primaryMaster) {
-          errorMessage = "Primary MentorMaster not found.";
-          return;
-        }
-
-        const primaryFaculty = primaryMaster.mentorUser
-          ? await Mentor.findById(primaryMaster.mentorUser).session(session)
-          : null;
-
-        const primaryHasActiveScope =
-          primaryFaculty?.isActive === true &&
-          primaryFaculty?.isVerified === true &&
-          primaryFaculty?.hasRole("MENTOR") &&
-          primaryFaculty
-            .getActiveRoleAssignments(now)
-            .some(
-              (assignment) =>
-                assignment.role === "MENTOR" &&
-                assignment.scopeType === "GROUP" &&
-                normalizeScope(assignment.scopeId) ===
-                  [
-                    normalizeScope(primaryMaster.institute),
-                    normalizeScope(primaryMaster.program),
-                    String(primaryMaster.semester),
-                    normalizeScope(primaryMaster.section),
-                    normalizeScope(primaryMaster.group),
-                  ].join("/"),
-            );
-
-        const primaryAvailable =
-          primaryMaster.isActive === true &&
-          primaryMaster.isDeleted !== true &&
-          primaryMaster.availabilityStatus === "AVAILABLE" &&
-          primaryFaculty?.availabilityStatus === "AVAILABLE" &&
-          Boolean(primaryHasActiveScope);
-
-        if (primaryAvailable) {
-          errorMessage = "Primary mentor is available. Backup cannot approve.";
-          return;
-        }
+      if (!sameId(authorityResult.faculty?._id, facultyId)) {
+        errorMessage =
+          "This faculty is no longer the current authorized authority. Request reassignment is required.";
+        return;
       }
 
       // ======================================================
-      // 10. IST DAILY QUOTA
+      // STEP 10 - VERIFY CORRECT AUTHORITY LEVEL
       // ======================================================
 
-      const dayKey = getISTDay(outpass.outDate);
+      if (authorityResult.assignedRole !== outpass.assignedRole) {
+        errorMessage =
+          "Approval authority has changed. Refresh and reassign this outpass.";
+        return;
+      }
 
-      const dayStart = new Date(`${dayKey}T00:00:00+05:30`);
+      // ======================================================
+      // STEP 11 - CHECK DAILY IST OUTPASS LIMIT
+      // ======================================================
 
-      const dayEnd = new Date(dayStart.getTime() + 86400000);
+      const dateRange = getISTDateRange(outpass.outDate);
 
-      const previousApproved = await Outpass.find({
-        student: outpass.student,
-        _id: { $ne: outpass._id },
-        isDeleted: false,
-        outDate: {
-          $gte: dayStart,
-          $lt: dayEnd,
-        },
-        approvedAt: { $ne: null },
-      })
-        .select("_id approvedAt exitVerified entryVerified dailyTripNumber")
-        .sort({ approvedAt: 1 })
-        .session(session);
+      if (!dateRange) {
+        errorMessage = "Invalid outpass date.";
+        return;
+      }
+
+      const { dayKey, start: dayStart, end: dayEnd } = dateRange;
+
+      const previousApproved = await getPreviousApprovedTrips({
+        studentId: outpass.student,
+        currentOutpassId: outpass._id,
+        dayKey,
+        dayStart,
+        dayEnd,
+        session,
+      });
 
       if (previousApproved.length >= 2) {
         errorMessage = "Maximum 2 approved outpasses allowed per IST day.";
@@ -409,20 +442,14 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
 
       const tripNumber = previousApproved.length + 1;
 
-      if (
-        tripNumber === 2 &&
-        !previousApproved.every(
-          (previous) =>
-            previous.exitVerified === true && previous.entryVerified === true,
-        )
-      ) {
+      if (tripNumber === 2 && !previousApproved.every(isTripCycleCompleted)) {
         errorMessage =
           "Complete EXIT and ENTRY of the first trip before second approval.";
         return;
       }
 
       // ======================================================
-      // 11. GENERATE STATIC SECURE QR TOKEN
+      // STEP 12 - GENERATE SECURE QR TOKEN
       // ======================================================
 
       let qr;
@@ -435,21 +462,30 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
       }
 
       // ======================================================
-      // 12. PREPARE CONDITIONAL APPROVAL FILTER
+      // STEP 13 - PARENT CONSENT CONDITIONAL FILTER
       // ======================================================
 
       const parentDecision = outpass.parentDecision;
 
       const filter = {
         _id: outpass._id,
+
         status: OUTPASS_STATUS.PENDING,
+
         isDeleted: false,
+
         assignedFaculty: facultyId,
+
         assignedRole: outpass.assignedRole,
+
         "parentDecision.status": "APPROVED",
+
         "parentDecision.method": parentDecision.method,
+
         "parentDecision.decidedAt": parentDecision.decidedAt,
+
         qrGenerated: false,
+
         dailyTripNumber: null,
       };
 
@@ -457,9 +493,12 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
         filter["parentDecision.tokenUsedAt"] = parentDecision.tokenUsedAt;
       } else if (parentDecision.method === "PHONE_CALL") {
         filter["parentDecision.callOutcome"] = "CONSENT";
+
         filter["parentDecision.verifiedByFaculty"] =
           parentDecision.verifiedByFaculty;
+
         filter["parentDecision.verifiedByRole"] = parentDecision.verifiedByRole;
+
         filter["parentDecision.callVerifiedAt"] = parentDecision.callVerifiedAt;
       } else {
         errorMessage = "Invalid parent approval method.";
@@ -467,34 +506,49 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
       }
 
       // ======================================================
-      // 13. ATOMIC APPROVAL + QR SAVE
+      // STEP 14 - ATOMIC APPROVAL
       // ======================================================
 
       const approved = await Outpass.findOneAndUpdate(
         filter,
+
         {
           $set: {
+            // Outpass approval
             status: OUTPASS_STATUS.APPROVED,
 
             approvedByFaculty: facultyId,
+
             approvedAuthorityRole: outpass.assignedRole,
+
             approvedAt: now,
+
             approvalRemark: cleanRemark,
 
+            // Daily quota
             outpassDayIST: dayKey,
+
             dailyTripNumber: tripNumber,
 
+            // Secure QR
             qrGenerated: true,
+
             qrGeneratedAt: qr.qrGeneratedAt,
+
             qrToken: qr.token,
+
             qrValidFrom: qr.qrValidFrom,
+
             qrExpiresAt: qr.qrExpiresAt,
+
             qrRevokedAt: null,
           },
+
           $push: {
             timeline: approvedEvent(facultyId, cleanRemark),
           },
         },
+
         {
           new: true,
           runValidators: true,
@@ -519,69 +573,94 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
     }
 
     console.error("Approve Outpass Error:", error);
+
     throw error;
   } finally {
     await session.endSession();
   }
 
+  // ============================================================
+  // STEP 15 - VERIFY COMMITTED APPROVAL
+  // ============================================================
+
   if (!approvedId) {
     return failure(errorMessage || "Outpass approval failed.");
   }
 
-  // Fetch after transaction commits.
   const updatedOutpass = await Outpass.findById(approvedId);
 
   if (!updatedOutpass) {
     return failure("Approved outpass could not be retrieved.");
   }
 
-  // ==========================================================
-  // 14. STUDENT NOTIFICATION
-  // ==========================================================
+  // ============================================================
+  // STEP 16 - STUDENT NOTIFICATION
+  // ============================================================
 
   try {
     await sendNotification({
       title: "Outpass Approved",
-      message: "Your outpass has been approved. Your digital QR pass is ready.",
-      type: SHARED_NOTIFICATION_TYPES.OUTPASS_APPROVED,
+
+      message:
+        "Your outpass has been approved. " + "Your digital QR pass is ready.",
+
+      type: NOTIFICATION_TYPES.OUTPASS_APPROVED,
+
       sender: facultyId,
+
       receiver: updatedOutpass.student,
+
       role: NOTIFICATION_ROLES.STUDENT,
+
       relatedOutpass: updatedOutpass._id,
     });
   } catch (error) {
-    console.error("Notification Error:", error);
+    console.error("Outpass Notification Error:", error.message);
   }
 
-  // ==========================================================
-  // 15. PARENT EMAIL
-  // ==========================================================
+  // ============================================================
+  // STEP 17 - OPTIONAL PARENT EMAIL
+  // ============================================================
 
   try {
     if (updatedOutpass.parentEmail?.trim()) {
       const html = outpassApprovedTemplate({
         parentName: updatedOutpass.parentName,
+
         studentName: updatedOutpass.studentName,
+
         outpassId: updatedOutpass.outpassId,
+
         destination: updatedOutpass.destination,
+
         outDate: updatedOutpass.outDate,
+
         outTime: updatedOutpass.outTime,
+
         expectedReturn: updatedOutpass.expectedReturn,
       });
 
       await sendEmail({
         to: updatedOutpass.parentEmail.trim(),
-        subject: "Outpass Approved",
+
+        subject: "AMIOUT - Outpass Approved",
+
         html,
       });
     }
   } catch (error) {
-    console.error("Email Error:", error);
+    console.error("Parent Approval Email Error:", error.message);
   }
+
+  // ============================================================
+  // STEP 18 - SUCCESS
+  // ============================================================
 
   return {
     success: true,
-    message: "Outpass approved successfully. Digital QR pass is ready.",
+
+    message: "Outpass approved successfully. " + "Digital QR pass is ready.",
+
     data: updatedOutpass,
   };
 };

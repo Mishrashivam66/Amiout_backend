@@ -15,7 +15,8 @@ const ROLES = require("../../auth/constants/roles");
 // ============================================================
 
 router.use(protect);
-router.use(authorize(ROLES.MENTOR));
+
+router.use(authorize(ROLES.MENTOR, ROLES.COORDINATOR, ROLES.HOD, ROLES.HOI));
 
 // ============================================================
 // DASHBOARD

@@ -447,12 +447,6 @@ const outpassSchema = new Schema(
     },
 
     // Legacy field retained for older outpass records.
-    expectedReturn: {
-      type: String,
-      required: false,
-      enum: EXPECTED_RETURN_OPTIONS.map((option) => option.value),
-      default: undefined,
-    },
 
     // Day scholars are not required to return.
     // Kept for existing records and API compatibility.

@@ -2,13 +2,12 @@
 
 const { validateOutpass } = require("../validators/outpassValidator");
 const { OUT_TIME_SLOTS } = require("../constants/timeSlots");
+
 const outpassRepository = require("../repositories/outpassRepository");
 const profileRepository = require("../../student/repositories/profileRepository");
 const authRepository = require("../../auth/repositories/auth.repository");
 
 const StudentMaster = require("../../academic/models/StudentMaster");
-const MentorMaster = require("../../academic/models/MentorMaster");
-const Mentor = require("../../auth/models/Mentor");
 const Institute = require("../../academic/models/Institute");
 const Program = require("../../academic/models/Program");
 const Outpass = require("../models/Outpass");
@@ -16,22 +15,33 @@ const Outpass = require("../models/Outpass");
 const { outpassDTO } = require("../dtos/outpass.dto");
 const { createActivity } = require("../../student/services/activityService");
 const { sendEmail } = require("../../auth/utils/email");
+
 const {
   sendNotification,
 } = require("../../notification/service/notificationService");
+
 const { sendSMS } = require("../../notification/service/smsService");
+
 const { createParentApprovalToken } = require("./parentApprovalService");
+
+// NEW: Centralized authority resolver
+const { resolveOutpassAuthority } = require("./outpassEscalationService");
 
 const generateOutpassId = require("../utils/outpassIdGenerator");
 const { appliedEvent } = require("../utils/timelineHelper");
+
 const { OUTPASS_STATUS } = require("../constants/outpassStatus");
+
 const { ACCOUNT_STATUS } = require("../../student/constants/studentConstants");
+
 const {
   NOTIFICATION_TYPES,
 } = require("../../../shared/types/notificationTypes");
+
 const {
   NOTIFICATION_ROLES,
 } = require("../../notification/constants/notificationConstants");
+
 const outpassSubmittedTemplate = require("../templates/outpassSubmittedTemplate");
 
 // ============================================================
@@ -51,17 +61,17 @@ const sameId = (a, b) =>
   String(a?._id ?? a ?? "") === String(b?._id ?? b ?? "");
 
 const escapeHtml = (value) =>
-  clean(value).replace(
-    /[&<>"']/g,
-    (char) =>
-      ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;",
-      })[char],
-  );
+  clean(value).replace(/[&<>"']/g, (char) => {
+    const replacements = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    };
+
+    return replacements[char];
+  });
 
 // ============================================================
 // IST DATE HELPERS
@@ -147,8 +157,7 @@ const getDayQuery = (dayKey) => {
 };
 
 // ============================================================
-// OPTIONAL IN TIME VALIDATION
-// In Time is planned return, not Security entry time.
+// OPTIONAL EXPECTED IN TIME
 // ============================================================
 
 const getSlotMinutes = (slot) => {
@@ -166,7 +175,6 @@ const getSlotMinutes = (slot) => {
 const getOptionalInTime = (payload = {}) => {
   const raw = payload.inTime;
 
-  // Student is not returning on the same day.
   if (raw === undefined || raw === null || raw === "") {
     return {
       success: true,
@@ -204,7 +212,7 @@ const getOptionalInTime = (payload = {}) => {
 };
 
 // ============================================================
-// STUDENT MASTER
+// GET OFFICIAL STUDENT MASTER
 // ============================================================
 
 const getStudentMaster = async (student) => {
@@ -225,146 +233,9 @@ const getStudentMaster = async (student) => {
 };
 
 // ============================================================
-// FACULTY AVAILABILITY
-// ============================================================
-
-const getAvailableMentor = async ({
-  mentorMasterId,
-  studentMaster,
-  institute,
-  program,
-  isBackup = false,
-}) => {
-  if (!mentorMasterId) {
-    return null;
-  }
-
-  const mentorMaster = await MentorMaster.findOne({
-    _id: mentorMasterId,
-    roles: "MENTOR",
-    isActive: true,
-    isDeleted: false,
-  }).lean();
-
-  if (!mentorMaster || !mentorMaster.mentorUser) {
-    return null;
-  }
-
-  // Verify mapped academic data.
-  const sameAcademicScope =
-    normalize(mentorMaster.institute) === normalize(institute.code) &&
-    normalize(mentorMaster.program) === normalize(program.code) &&
-    Number(mentorMaster.semester) === Number(studentMaster.semester) &&
-    normalize(mentorMaster.section) === normalize(studentMaster.section);
-
-  if (!sameAcademicScope) {
-    return null;
-  }
-
-  const studentGroup = normalize(studentMaster.group);
-
-  const mentorGroup = normalize(mentorMaster.group);
-
-  if (!isBackup && mentorGroup !== studentGroup) {
-    return null;
-  }
-
-  if (isBackup && mentorGroup === studentGroup) {
-    return null;
-  }
-
-  const faculty = await Mentor.findOne({
-    _id: mentorMaster.mentorUser,
-    isActive: true,
-    isVerified: true,
-    availabilityStatus: "AVAILABLE",
-    roles: "MENTOR",
-  }).lean();
-
-  if (!faculty) {
-    return null;
-  }
-
-  if (
-    clean(faculty.email).toLowerCase() !==
-    clean(mentorMaster.mentorEmail).toLowerCase()
-  ) {
-    return null;
-  }
-
-  const now = new Date();
-
-  const hasActiveMentorRole =
-    Array.isArray(faculty.roleAssignments) &&
-    faculty.roleAssignments.some((assignment) => {
-      const startsAt = assignment.startsAt
-        ? new Date(assignment.startsAt)
-        : null;
-
-      const expiresAt = assignment.expiresAt
-        ? new Date(assignment.expiresAt)
-        : null;
-
-      return (
-        assignment.role === "MENTOR" &&
-        assignment.isActive === true &&
-        (!startsAt || startsAt <= now) &&
-        (!expiresAt || expiresAt > now)
-      );
-    });
-
-  if (!hasActiveMentorRole) {
-    return null;
-  }
-
-  return {
-    faculty,
-    mentorMaster,
-    assignmentRole: isBackup ? "BACKUP_MENTOR" : "MENTOR",
-  };
-};
-
-// ============================================================
-// PRIMARY -> BACKUP MENTOR
-// ============================================================
-
-const resolveFaculty = async ({ studentMaster, institute, program }) => {
-  const primary = await getAvailableMentor({
-    mentorMasterId: studentMaster.primaryMentor,
-    studentMaster,
-    institute,
-    program,
-    isBackup: false,
-  });
-
-  if (primary) {
-    return primary;
-  }
-
-  if (
-    studentMaster.backupMentor &&
-    !sameId(studentMaster.primaryMentor, studentMaster.backupMentor)
-  ) {
-    const backup = await getAvailableMentor({
-      mentorMasterId: studentMaster.backupMentor,
-      studentMaster,
-      institute,
-      program,
-      isBackup: true,
-    });
-
-    if (backup) {
-      return backup;
-    }
-  }
-
-  // Coordinator, HOD and HOI fallback requires
-  // separate verified academic-scope resolution.
-  return null;
-};
-
-// ============================================================
 // DAILY OUTPASS RULES
+// Maximum 2 approved trips per IST day.
+// Second trip requires verified EXIT + ENTRY.
 // ============================================================
 
 const checkDailyOutpassRules = async (studentId, dayKey) => {
@@ -373,6 +244,7 @@ const checkDailyOutpassRules = async (studentId, dayKey) => {
   const approvedTrips = await Outpass.find({
     student: studentId,
     isDeleted: false,
+
     $and: [
       dayQuery,
       {
@@ -399,9 +271,7 @@ const checkDailyOutpassRules = async (studentId, dayKey) => {
     ],
   })
     .select("exitVerified entryVerified " + "exitVerifiedAt entryVerifiedAt")
-    .sort({
-      createdAt: 1,
-    })
+    .sort({ createdAt: 1 })
     .lean();
 
   if (approvedTrips.length >= 2) {
@@ -434,7 +304,8 @@ const checkDailyOutpassRules = async (studentId, dayKey) => {
 
     if (!completedCycle) {
       return fail(
-        "Security must verify your previous EXIT and ENTRY before you can apply for the second outpass.",
+        "Security must verify your previous EXIT and ENTRY " +
+          "before you can apply for the second outpass.",
       );
     }
   }
@@ -445,27 +316,40 @@ const checkDailyOutpassRules = async (studentId, dayKey) => {
 };
 
 // ============================================================
+// FACULTY NOTIFICATION ROLE
+// ============================================================
+
+const getNotificationRole = (assignedRole) => {
+  const normalizedRole =
+    assignedRole === "BACKUP_MENTOR" ? "MENTOR" : assignedRole;
+
+  return NOTIFICATION_ROLES[normalizedRole] || NOTIFICATION_ROLES.MENTOR;
+};
+
+// ============================================================
 // PARENT APPROVAL SMS
 // ============================================================
 
 const sendParentSMS = async ({ outpass, studentName, parentMobileNumber }) => {
-  if (!process.env.FRONTEND_URL) {
-    throw new Error("FRONTEND_URL is missing.");
+  // Existing AMIOUT frontend environment variable.
+  const clientURL = process.env.CLIENT_URL;
+
+  if (!clientURL) {
+    throw new Error("CLIENT_URL is missing.");
   }
 
   const { token } = await createParentApprovalToken(outpass._id);
 
-  const reviewURL = new URL(
-    `/parent/review/${token}`,
-    process.env.FRONTEND_URL,
-  ).toString();
+  const reviewURL = new URL(`/parent/review/${token}`, clientURL).toString();
 
   const message =
     `AMIOUT: ${studentName} has requested ` +
     `an outpass. Review: ${reviewURL}`;
 
   await Outpass.updateOne(
-    { _id: outpass._id },
+    {
+      _id: outpass._id,
+    },
     {
       $set: {
         parentSMSStatus: "PENDING",
@@ -477,6 +361,9 @@ const sendParentSMS = async ({ outpass, studentName, parentMobileNumber }) => {
     },
   );
 
+  // Both providers receive the same interface.
+  // Mock stores the message locally in development.
+  // Fast2SMS sends through the configured DLT template.
   const result = await sendSMS({
     to: parentMobileNumber,
     message,
@@ -491,7 +378,9 @@ const sendParentSMS = async ({ outpass, studentName, parentMobileNumber }) => {
         : "FAILED";
 
   await Outpass.updateOne(
-    { _id: outpass._id },
+    {
+      _id: outpass._id,
+    },
     {
       $set: {
         parentSMSStatus: status,
@@ -538,7 +427,9 @@ const notifyParentByEmail = async ({
   });
 
   await Outpass.updateOne(
-    { _id: outpass._id },
+    {
+      _id: outpass._id,
+    },
     {
       $set: {
         parentEmailSent: true,
@@ -549,15 +440,23 @@ const notifyParentByEmail = async ({
 
 // ============================================================
 // FACULTY ASSIGNMENT EMAIL
+// Supports Mentor, Backup, Coordinator, HOD, HOI
 // ============================================================
 
-const notifyFacultyByEmail = async ({ outpass, faculty, studentName }) => {
+const notifyFacultyByEmail = async ({
+  outpass,
+  faculty,
+  studentName,
+  assignedRole,
+}) => {
   if (!faculty.email) {
     return;
   }
 
   await Outpass.updateOne(
-    { _id: outpass._id },
+    {
+      _id: outpass._id,
+    },
     {
       $set: {
         facultyAssignmentEmailStatus: "PENDING",
@@ -569,13 +468,18 @@ const notifyFacultyByEmail = async ({ outpass, faculty, studentName }) => {
   try {
     const html = `
       <div style="font-family:Arial,sans-serif">
-        <h2>AMIOUT - New Outpass</h2>
+        <h2>AMIOUT - New Outpass Request</h2>
 
         <p>Dear ${escapeHtml(faculty.name)},</p>
 
         <p>
-          A new outpass has been assigned
+          A new outpass request has been assigned
           to your dashboard.
+        </p>
+
+        <p>
+          <strong>Assigned Authority:</strong>
+          ${escapeHtml(assignedRole)}
         </p>
 
         <p>
@@ -604,8 +508,8 @@ const notifyFacultyByEmail = async ({ outpass, faculty, studentName }) => {
         </p>
 
         <p>
-          Please log in to AMIOUT
-          to review the request.
+          Please log in to AMIOUT to review
+          the assigned request.
         </p>
       </div>
     `;
@@ -617,7 +521,9 @@ const notifyFacultyByEmail = async ({ outpass, faculty, studentName }) => {
     });
 
     await Outpass.updateOne(
-      { _id: outpass._id },
+      {
+        _id: outpass._id,
+      },
       {
         $set: {
           facultyAssignmentEmailStatus: "SENT",
@@ -627,7 +533,9 @@ const notifyFacultyByEmail = async ({ outpass, faculty, studentName }) => {
     );
   } catch (error) {
     await Outpass.updateOne(
-      { _id: outpass._id },
+      {
+        _id: outpass._id,
+      },
       {
         $set: {
           facultyAssignmentEmailStatus: "FAILED",
@@ -644,7 +552,9 @@ const notifyFacultyByEmail = async ({ outpass, faculty, studentName }) => {
 // ============================================================
 
 const applyOutpass = async (studentId, payload) => {
-  // STEP 1: FORM VALIDATION
+  // ==========================================================
+  // STEP 1: VALIDATE FORM
+  // ==========================================================
 
   const validation = validateOutpass(payload);
 
@@ -655,7 +565,9 @@ const applyOutpass = async (studentId, payload) => {
     };
   }
 
-  // STEP 2: OPTIONAL IN TIME
+  // ==========================================================
+  // STEP 2: OPTIONAL EXPECTED IN TIME
+  // ==========================================================
 
   const inTimeResult = getOptionalInTime(payload);
 
@@ -663,7 +575,9 @@ const applyOutpass = async (studentId, payload) => {
     return inTimeResult;
   }
 
+  // ==========================================================
   // STEP 3: AUTHENTICATED STUDENT
+  // ==========================================================
 
   const student = await authRepository.findUserById(studentId);
 
@@ -671,7 +585,9 @@ const applyOutpass = async (studentId, payload) => {
     return fail("Student account not found.");
   }
 
-  // STEP 4: STUDENTMASTER
+  // ==========================================================
+  // STEP 4: OFFICIAL STUDENT MASTER
+  // ==========================================================
 
   const studentMaster = await getStudentMaster(student);
 
@@ -679,8 +595,9 @@ const applyOutpass = async (studentId, payload) => {
     return fail("StudentMaster record is missing or registration is inactive.");
   }
 
-  // STEP 5: ACCOUNT HOLD CHECK
-  // No profile lock/completion restriction.
+  // ==========================================================
+  // STEP 5: ACCOUNT HOLD
+  // ==========================================================
 
   const profile = await profileRepository.findByUserId(studentId);
 
@@ -688,7 +605,9 @@ const applyOutpass = async (studentId, payload) => {
     return fail("Your account is on HOLD. Please contact administration.");
   }
 
-  // STEP 6: ACADEMIC DETAILS
+  // ==========================================================
+  // STEP 6: STUDENT ACADEMIC DETAILS
+  // ==========================================================
 
   const section = normalize(studentMaster.section);
 
@@ -708,8 +627,13 @@ const applyOutpass = async (studentId, payload) => {
     return fail("Primary Mentor mapping is missing.");
   }
 
+  // ==========================================================
+  // STEP 7: VERIFY INSTITUTE AND PROGRAM
+  // ==========================================================
+
   const [institute, program] = await Promise.all([
     Institute.findById(studentMaster.institute).lean(),
+
     Program.findById(studentMaster.program).lean(),
   ]);
 
@@ -725,7 +649,9 @@ const applyOutpass = async (studentId, payload) => {
     return fail("Academic Institute or Program is invalid.");
   }
 
-  // STEP 7: PARENT DETAILS
+  // ==========================================================
+  // STEP 8: PARENT DETAILS
+  // ==========================================================
 
   const parentName = clean(studentMaster.parentName);
 
@@ -739,28 +665,47 @@ const applyOutpass = async (studentId, payload) => {
     return fail("Valid parent mobile number is missing in StudentMaster.");
   }
 
-  // Parent email is not stored in StudentMaster.
-  // Never trust a client-supplied parent email.
-
+  // StudentMaster does not provide a verified
+  // parent email. Do not trust client-supplied email.
   const parentEmail = "";
 
-  // STEP 8: FACULTY ASSIGNMENT
+  // ==========================================================
+  // STEP 9: AUTOMATIC FACULTY ASSIGNMENT
+  //
+  // Primary Mentor -> Backup Mentor ->
+  // Coordinator -> HOD -> HOI
+  // ==========================================================
 
-  const facultyAssignment = await resolveFaculty({
+  const authorityResult = await resolveOutpassAuthority({
     studentMaster,
-    institute,
-    program,
+    now: new Date(),
   });
 
-  if (!facultyAssignment) {
-    return fail(
-      "Primary and Backup Mentor are unavailable or not authorized. Coordinator/HOD/HOI fallback is not configured yet.",
-    );
+  if (!authorityResult.success) {
+    return fail(authorityResult.message || "No authorized faculty available.");
   }
 
-  const faculty = facultyAssignment.faculty;
+  const faculty = authorityResult.faculty;
 
-  // STEP 9: OUT DATE
+  const assignedRole = authorityResult.assignedRole;
+
+  const assignmentReason = authorityResult.reason;
+
+  const allowedAssignmentRoles = new Set([
+    "MENTOR",
+    "BACKUP_MENTOR",
+    "COORDINATOR",
+    "HOD",
+    "HOI",
+  ]);
+
+  if (!faculty?._id || !allowedAssignmentRoles.has(assignedRole)) {
+    return fail("Invalid authorized faculty assignment.");
+  }
+
+  // ==========================================================
+  // STEP 10: VALIDATE REQUESTED OUTPASS DATE
+  // ==========================================================
 
   const dateInfo = parseOutpassDate(payload.outDate);
 
@@ -775,7 +720,9 @@ const applyOutpass = async (studentId, payload) => {
     return fail("Past date outpasses are not allowed.");
   }
 
-  // STEP 10: DAILY OUTPASS LIMIT
+  // ==========================================================
+  // STEP 11: DAILY LIMIT VALIDATION
+  // ==========================================================
 
   const dailyCheck = await checkDailyOutpassRules(studentId, dayKey);
 
@@ -783,33 +730,41 @@ const applyOutpass = async (studentId, payload) => {
     return dailyCheck;
   }
 
-  // STEP 11: PREPARE DATABASE PAYLOAD
+  // ==========================================================
+  // STEP 12: GENERATE OUTPASS ID
+  // ==========================================================
 
   const outpassId = await generateOutpassId();
+
+  // ==========================================================
+  // STEP 13: PREPARE DATABASE PAYLOAD
+  // ==========================================================
 
   const outpassPayload = {
     outpassId,
 
     student: student._id,
 
-    // Legacy mentor reference.
+    // Legacy mentor field retained for compatibility.
     mentor: faculty._id,
 
+    // Official assignment
     assignedFaculty: faculty._id,
-
-    assignedRole: facultyAssignment.assignmentRole,
+    assignedRole,
 
     assignmentHistory: [
       {
         toFaculty: faculty._id,
-        toRole: facultyAssignment.assignmentRole,
+        toRole: assignedRole,
         reason: "INITIAL_ASSIGNMENT",
         remarks:
-          "Assigned automatically using StudentMaster mapping and faculty availability.",
+          `Automatic assignment: ${assignmentReason}. ` +
+          "Resolved using official academic scope " +
+          "and faculty availability.",
       },
     ],
 
-    // StudentMaster snapshot.
+    // Student academic snapshot
     studentName: studentMaster.name,
 
     enrollmentNumber: studentMaster.enrollmentNumber,
@@ -831,7 +786,7 @@ const applyOutpass = async (studentId, payload) => {
 
     academicBatch: clean(studentMaster.batch),
 
-    // Parent information from StudentMaster.
+    // Parent information
     parentName,
     parentMobileNumber,
     parentEmail,
@@ -842,7 +797,7 @@ const applyOutpass = async (studentId, payload) => {
 
     parentSMSStatus: "NOT_SENT",
 
-    // Form details.
+    // Student request
     reason: clean(payload.reason),
 
     destination: clean(payload.destination),
@@ -851,45 +806,55 @@ const applyOutpass = async (studentId, payload) => {
 
     outTime: payload.outTime,
 
-    // NEW: Optional expected campus return.
     inTime: inTimeResult.value,
 
-    // Legacy return field is not required.
     expectedReturn: undefined,
 
+    // IST daily trip control
     outpassDayIST: dayKey,
-
-    // Allocate trip number after approval.
     dailyTripNumber: null,
 
     status: OUTPASS_STATUS.PENDING,
 
+    // QR only after parent + faculty approval
     qrGenerated: false,
 
     timeline: [appliedEvent(student._id)],
   };
 
-  // STEP 12: CREATE OUTPASS
+  // ==========================================================
+  // STEP 14: CREATE OUTPASS
+  // ==========================================================
 
   const outpass = await outpassRepository.createOutpass(outpassPayload);
 
-  // STEP 13: STUDENT ACTIVITY
+  // ==========================================================
+  // STEP 15: STUDENT ACTIVITY
+  // ==========================================================
 
   try {
     await createActivity({
       user: student._id,
+
       title: "Outpass Submitted",
-      description: `Outpass ${outpass.outpassId} submitted successfully.`,
+
+      description: `Outpass ${outpass.outpassId} ` + "submitted successfully.",
+
       type: "OUTPASS_APPLIED",
+
       outpass: outpass._id,
+
       icon: "file-text",
+
       color: "blue",
     });
   } catch (error) {
     console.error("Outpass activity failed:", error.message);
   }
 
-  // STEP 14: PARENT SMS
+  // ==========================================================
+  // STEP 16: PARENT SMS
+  // ==========================================================
 
   try {
     const smsResult = await sendParentSMS({
@@ -923,7 +888,9 @@ const applyOutpass = async (studentId, payload) => {
     }
   }
 
-  // STEP 15: OPTIONAL PARENT EMAIL
+  // ==========================================================
+  // STEP 17: OPTIONAL PARENT EMAIL
+  // ==========================================================
 
   try {
     await notifyParentByEmail({
@@ -936,66 +903,90 @@ const applyOutpass = async (studentId, payload) => {
     console.error("Parent email failed:", error.message);
   }
 
-  // STEP 16: STUDENT NOTIFICATION
+  // ==========================================================
+  // STEP 18: STUDENT NOTIFICATION
+  // ==========================================================
 
   try {
     await sendNotification({
       title: "Outpass Submitted",
+
       message:
-        "Your outpass request has been submitted. Parent approval is pending.",
+        "Your outpass request has been submitted. " +
+        "Parent approval is pending.",
+
       type: NOTIFICATION_TYPES.OUTPASS_SUBMITTED,
+
       sender: null,
+
       receiver: student._id,
+
       role: NOTIFICATION_ROLES.STUDENT,
+
       relatedOutpass: outpass._id,
     });
   } catch (error) {
     console.error("Student notification failed:", error.message);
   }
 
-  // STEP 17: FACULTY NOTIFICATION
+  // ==========================================================
+  // STEP 19: ASSIGNED FACULTY NOTIFICATION
+  // ==========================================================
 
   try {
     await sendNotification({
       title: "New Outpass Request",
-      message: `${studentMaster.name} has applied for an outpass. Parent approval is pending.`,
+
+      message:
+        `${studentMaster.name} has applied ` +
+        "for an outpass. Parent approval is pending.",
+
       type: NOTIFICATION_TYPES.OUTPASS_SUBMITTED,
+
       sender: student._id,
+
       receiver: faculty._id,
-      role: NOTIFICATION_ROLES.MENTOR,
+
+      role: getNotificationRole(assignedRole),
+
       relatedOutpass: outpass._id,
     });
   } catch (error) {
     console.error("Faculty notification failed:", error.message);
   }
 
-  // STEP 18: FACULTY EMAIL
+  // ==========================================================
+  // STEP 20: FACULTY EMAIL
+  // ==========================================================
 
   try {
     await notifyFacultyByEmail({
       outpass,
       faculty,
       studentName: studentMaster.name,
+      assignedRole,
     });
   } catch (error) {
     console.error("Faculty email failed:", error.message);
   }
 
-  // STEP 19: RETURN RESPONSE
+  // ==========================================================
+  // STEP 21: RESPONSE
+  // ==========================================================
 
   const latestOutpass = await Outpass.findById(outpass._id);
 
   return {
     success: true,
+
     message:
-      "Outpass submitted successfully. Parent consent and university approval are pending.",
+      "Outpass submitted successfully. " +
+      `Assigned authority: ${assignedRole}. ` +
+      "Parent consent and university approval are pending.",
+
     data: outpassDTO(latestOutpass || outpass),
   };
 };
-
-// ============================================================
-// EXPORT
-// ============================================================
 
 module.exports = Object.freeze({
   applyOutpass,

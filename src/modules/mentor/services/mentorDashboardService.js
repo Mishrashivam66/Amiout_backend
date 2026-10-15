@@ -5,7 +5,9 @@ const { getStudentsForRole } = require("./facultyStudentsService");
 const profileRepository = require("../../student/repositories/profileRepository");
 const { getFacultyDashboardStats } = require("./facultyDashboardStatsService");
 const { OUTPASS_STATUS } = require("../../outpass/constants/outpassStatus");
-
+const {
+  reassignPendingOutpasses,
+} = require("../../outpass/services/outpassReassignmentService");
 const Mentor = require("../../auth/models/Mentor");
 
 const MentorMaster = require("../../academic/models/MentorMaster");

@@ -222,14 +222,109 @@ const updateProfile = asyncHandler(async (req, res) => {
 // UPDATE FACULTY AVAILABILITY
 // ============================================================
 
-const updateAvailability = asyncHandler(async (req, res) => {
-  const result = await mentorDashboardService.updateAvailability(
-    getFacultyId(req),
-    req.body.availabilityStatus,
-  );
+const updateAvailability = async (mentorId, availabilityStatus) => {
+  const nextStatus = String(availabilityStatus || "")
+    .trim()
+    .toUpperCase();
 
-  return sendServiceResult(res, result, 400);
-});
+  if (!["AVAILABLE", "UNAVAILABLE"].includes(nextStatus)) {
+    return {
+      success: false,
+      message: "Invalid availability status.",
+    };
+  }
+
+  const mentor = await Mentor.findById(mentorId);
+
+  if (!mentor) {
+    return {
+      success: false,
+      message: "Faculty account not found.",
+    };
+  }
+
+  if (mentor.isActive !== true || mentor.isVerified !== true) {
+    return {
+      success: false,
+      message: "Faculty account is inactive or unverified.",
+    };
+  }
+
+  // ----------------------------------------------------------
+  // Update the official faculty availability.
+  // ----------------------------------------------------------
+
+  const now = new Date();
+
+  mentor.availabilityStatus = nextStatus;
+  mentor.availabilityUpdatedAt = now;
+
+  await mentor.save();
+
+  // ----------------------------------------------------------
+  // AVAILABLE
+  //
+  // Do not pull previously reassigned requests back.
+  // ----------------------------------------------------------
+
+  if (nextStatus === "AVAILABLE") {
+    return {
+      success: true,
+      message: "Faculty marked as AVAILABLE.",
+      data: {
+        availabilityStatus: mentor.availabilityStatus,
+        availabilityUpdatedAt: mentor.availabilityUpdatedAt,
+        reassignment: null,
+      },
+    };
+  }
+
+  // ----------------------------------------------------------
+  // UNAVAILABLE
+  //
+  // Reconcile ALL remaining PENDING requests.
+  // Calling UNAVAILABLE again can retry unresolved work.
+  // ----------------------------------------------------------
+
+  try {
+    const summary = await reassignPendingOutpasses(mentor._id);
+
+    const complete = summary.unresolved === 0 && summary.skipped === 0;
+
+    return {
+      success: true,
+
+      message: complete
+        ? "Faculty marked as UNAVAILABLE. Pending outpass reassignment processed."
+        : "Faculty marked as UNAVAILABLE, but some pending outpasses require reassignment review.",
+
+      data: {
+        availabilityStatus: mentor.availabilityStatus,
+        availabilityUpdatedAt: mentor.availabilityUpdatedAt,
+        reassignmentComplete: complete,
+        reassignment: summary,
+      },
+    };
+  } catch (error) {
+    console.error("Availability reassignment failed:", error.message);
+
+    // Availability has already been saved successfully.
+    // Report the incomplete reassignment explicitly.
+    return {
+      success: true,
+      message:
+        "Faculty marked as UNAVAILABLE, but automatic reassignment failed. Administrative review or retry is required.",
+
+      data: {
+        availabilityStatus: mentor.availabilityStatus,
+        availabilityUpdatedAt: mentor.availabilityUpdatedAt,
+        reassignmentComplete: false,
+        reassignment: null,
+        reassignmentError: error.message,
+      },
+    };
+  }
+};
 
 // ============================================================
 // GET OFFICIAL FACULTY PROFILE

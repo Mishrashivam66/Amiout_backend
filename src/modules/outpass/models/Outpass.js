@@ -851,6 +851,22 @@ outpassSchema.index({
 // Parent approval token lookup.
 // Sparse + partial index avoids indexing all
 // outpasses without generated parent tokens.
+// ============================================================
+// QR TOKEN - PARTIAL UNIQUE INDEX
+// Allow multiple pending outpasses with qrToken: null.
+// Enforce uniqueness only for actual QR token strings.
+// ============================================================
+
+outpassSchema.index(
+  { qrToken: 1 },
+  {
+    name: "qrToken_1",
+    unique: true,
+    partialFilterExpression: {
+      qrToken: { $type: "string" },
+    },
+  },
+);
 outpassSchema.index(
   {
     "parentDecision.tokenHash": 1,

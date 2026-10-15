@@ -17,6 +17,9 @@ const {
   getAdminProfile,
   updateAdminProfile,
 } = require("../controllers/admin.controller");
+const {
+  createSecurityGuardController,
+} = require("../../admin/controllers/securityGuardController");
 
 // ==========================================
 // ADMIN REGISTRATION
@@ -68,7 +71,12 @@ router.get(
 // SUPER_ADMIN has read-only profile access.
 
 router.put("/profile", protect, requireRoles("ADMIN"), updateAdminProfile);
-
+router.post(
+  "/security-guards",
+  protect,
+  requireRoles("ADMIN"),
+  createSecurityGuardController,
+);
 // ==========================================
 // EXPORT
 // ==========================================

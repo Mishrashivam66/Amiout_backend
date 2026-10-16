@@ -9,9 +9,9 @@ const { OUTPASS_STATUS } = require("../constants/outpassStatus");
 
 const { verifyQRSignature } = require("./qrService");
 
-const { outpassDTO } = require("../dtos/outpass.dto");
-
 const { createActivity } = require("../../student/services/activityService");
+
+const { buildSecurityResponse } = require("../utils/securityResponse");
 
 // ============================================================
 // HELPERS
@@ -35,8 +35,7 @@ const tokensMatch = (a, b) => {
 };
 
 // ============================================================
-// SECURITY QR TIME WINDOW
-// 09:15 AM - 05:15 PM IST
+// GATE WINDOW: 09:15 AM - 05:15 PM IST
 // ============================================================
 
 const getISTMinutes = (date = new Date()) => {
@@ -60,123 +59,37 @@ const isWithinGateWindow = (date = new Date()) => {
 };
 
 // ============================================================
-// MASK PARENT MOBILE NUMBER
-// Security dashboard should not expose full number.
+// POPULATE APPROVAL DETAILS
 // ============================================================
 
-const maskMobile = (mobile) => {
-  if (!mobile) return null;
-
-  const value = String(mobile).trim();
-
-  if (value.length < 4) {
-    return "****";
+const populateSecurityDetails = async (outpass) => {
+  try {
+    await outpass.populate([
+      {
+        path: "approvedByFaculty",
+        select: "name designation",
+      },
+      {
+        path: "parentDecision.verifiedByFaculty",
+        select: "name designation",
+      },
+      {
+        path: "academicInstitute",
+        select: "name code",
+      },
+      {
+        path: "academicProgram",
+        select: "name code",
+      },
+    ]);
+  } catch (error) {
+    // ENTRY is already committed.
+    // Do not repeat verification because of
+    // an optional display-data failure.
+    console.error("ENTRY approval detail population failed:", error.message);
   }
 
-  return "*".repeat(value.length - 4) + value.slice(-4);
-};
-
-// ============================================================
-// GET VERIFIED RESPONSE DATA
-// ============================================================
-
-const buildSecurityResponse = (outpass) => {
-  const dto = outpassDTO(outpass) || {};
-
-  const parent = dto.parent || {};
-
-  return {
-    ...dto,
-
-    // --------------------------------------------------------
-    // STUDENT DETAILS
-    // --------------------------------------------------------
-
-    studentName: outpass.studentName || null,
-
-    enrollmentNumber: outpass.enrollmentNumber || null,
-
-    branch: outpass.branch || null,
-
-    course: outpass.course || null,
-
-    semester: outpass.semester ?? null,
-
-    section: outpass.section || null,
-
-    group: outpass.group || null,
-
-    // --------------------------------------------------------
-    // PARENT DETAILS
-    // --------------------------------------------------------
-
-    parent: {
-      ...parent,
-
-      name: outpass.parentName || null,
-
-      mobileNumber: maskMobile(outpass.parentMobileNumber),
-    },
-
-    parentDecision: {
-      status: outpass.parentDecision?.status || "PENDING",
-
-      method: outpass.parentDecision?.method || null,
-
-      decidedAt: outpass.parentDecision?.decidedAt || null,
-    },
-
-    // --------------------------------------------------------
-    // ACTUAL APPROVING FACULTY
-    // approvedByFaculty is populated before calling this.
-    // Never substitute assigned mentor as approver.
-    // --------------------------------------------------------
-
-    facultyApproval: {
-      status:
-        outpass.approvedByFaculty && outpass.approvedAt
-          ? "APPROVED"
-          : "PENDING",
-
-      approvedBy: dto.approvedByFaculty || null,
-
-      approvedAuthorityRole: outpass.approvedAuthorityRole || null,
-
-      approvedAt: outpass.approvedAt || null,
-
-      remark: outpass.approvalRemark || "",
-    },
-
-    // --------------------------------------------------------
-    // OUTPASS DETAILS
-    // --------------------------------------------------------
-
-    outpassId: outpass.outpassId,
-
-    status: outpass.status,
-
-    destination: outpass.destination || null,
-
-    reason: outpass.reason || null,
-
-    outDate: outpass.outDate,
-
-    outTime: outpass.outTime,
-
-    inTime: outpass.inTime ?? null,
-
-    // --------------------------------------------------------
-    // GATE MOVEMENT DETAILS
-    // --------------------------------------------------------
-
-    exitVerified: outpass.exitVerified === true,
-
-    exitVerifiedAt: outpass.exitVerifiedAt || null,
-
-    entryVerified: outpass.entryVerified === true,
-
-    entryVerifiedAt: outpass.entryVerifiedAt || null,
-  };
+  return outpass;
 };
 
 // ============================================================
@@ -184,9 +97,9 @@ const buildSecurityResponse = (outpass) => {
 // ============================================================
 
 const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
-  // ==========================================================
+  // ----------------------------------------------------------
   // 1. VALIDATE IDENTIFIERS
-  // ==========================================================
+  // ----------------------------------------------------------
 
   if (
     !mongoose.isValidObjectId(outpassId) ||
@@ -201,9 +114,9 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
 
   const now = new Date();
 
-  // ==========================================================
-  // 2. VERIFY SECURITY GATE WINDOW
-  // ==========================================================
+  // ----------------------------------------------------------
+  // 2. GATE WINDOW
+  // ----------------------------------------------------------
 
   if (!isWithinGateWindow(now)) {
     return fail(
@@ -211,9 +124,9 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     );
   }
 
-  // ==========================================================
-  // 3. VERIFY SIGNED QR
-  // ==========================================================
+  // ----------------------------------------------------------
+  // 3. SIGNED QR
+  // ----------------------------------------------------------
 
   const verification = verifyQRSignature(qrToken, now);
 
@@ -225,9 +138,9 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     return fail("QR token does not belong to this outpass.");
   }
 
-  // ==========================================================
-  // 4. FETCH OUTPASS WITH SECURE TOKEN
-  // ==========================================================
+  // ----------------------------------------------------------
+  // 4. LOAD OUTPASS
+  // ----------------------------------------------------------
 
   const outpass = await Outpass.findOne({
     _id: outpassId,
@@ -238,9 +151,9 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     return fail("Outpass not found.");
   }
 
-  // ==========================================================
-  // 5. ENTRY REQUIRES COMPLETED EXIT
-  // ==========================================================
+  // ----------------------------------------------------------
+  // 5. ENTRY REQUIRES VERIFIED EXIT
+  // ----------------------------------------------------------
 
   if (outpass.status !== OUTPASS_STATUS.EXITED) {
     return fail("Student must have a verified EXIT before ENTRY.");
@@ -250,17 +163,17 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     return fail("Verified EXIT record is missing.");
   }
 
-  // ==========================================================
+  // ----------------------------------------------------------
   // 6. PREVENT DUPLICATE ENTRY
-  // ==========================================================
+  // ----------------------------------------------------------
 
   if (outpass.entryVerified === true || outpass.entryVerifiedAt) {
     return fail("ENTRY is already verified.");
   }
 
-  // ==========================================================
-  // 7. VERIFY STORED QR
-  // ==========================================================
+  // ----------------------------------------------------------
+  // 7. QR TOKEN CHECK
+  // ----------------------------------------------------------
 
   if (
     outpass.qrGenerated !== true ||
@@ -274,9 +187,9 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     return fail("QR pass has been revoked.");
   }
 
-  // ==========================================================
-  // 8. CHECK QR VALIDITY
-  // ==========================================================
+  // ----------------------------------------------------------
+  // 8. QR TIME VALIDITY
+  // ----------------------------------------------------------
 
   if (
     !outpass.qrValidFrom ||
@@ -287,17 +200,17 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     return fail("QR pass is outside its permitted time window.");
   }
 
-  // ==========================================================
-  // 9. ENTRY MUST FOLLOW EXIT TIME
-  // ==========================================================
+  // ----------------------------------------------------------
+  // 9. ENTRY TIME MUST FOLLOW EXIT
+  // ----------------------------------------------------------
 
   if (now <= new Date(outpass.exitVerifiedAt)) {
     return fail("ENTRY time must be later than EXIT time.");
   }
 
-  // ==========================================================
-  // 10. GET RETURNED STATUS
-  // ==========================================================
+  // ----------------------------------------------------------
+  // 10. RETURNED STATUS
+  // ----------------------------------------------------------
 
   const returnedStatus = OUTPASS_STATUS.RETURNED || OUTPASS_STATUS.COMPLETED;
 
@@ -305,9 +218,9 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     return fail("RETURNED or COMPLETED status is not configured.");
   }
 
-  // ==========================================================
+  // ----------------------------------------------------------
   // 11. ATOMIC ENTRY VERIFICATION
-  // ==========================================================
+  // ----------------------------------------------------------
 
   const updatedOutpass = await Outpass.findOneAndUpdate(
     {
@@ -360,13 +273,13 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
 
   if (!updatedOutpass) {
     return fail(
-      "ENTRY verification failed. Pass state changed or it was already scanned.",
+      "ENTRY verification failed. The pass state may have changed or it was already scanned.",
     );
   }
 
-  // ==========================================================
+  // ----------------------------------------------------------
   // 12. STUDENT ACTIVITY
-  // ==========================================================
+  // ----------------------------------------------------------
 
   try {
     await createActivity({
@@ -383,44 +296,30 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
       outpass: updatedOutpass._id,
 
       icon: "shield-check",
-
       color: "green",
     });
   } catch (error) {
     console.error("ENTRY activity error:", error.message);
   }
 
-  // ==========================================================
-  // 13. POPULATE ACTUAL APPROVING FACULTY
-  // ==========================================================
+  // ----------------------------------------------------------
+  // 13. POPULATE APPROVAL DETAILS
+  // ----------------------------------------------------------
 
-  const detailedOutpass = await Outpass.findById(updatedOutpass._id)
-    .populate({
-      path: "approvedByFaculty",
-      select: "name designation email",
-    })
-    .lean();
+  await populateSecurityDetails(updatedOutpass);
 
-  // If the follow-up read fails to find the record,
-  // retain a successful movement response.
-  const responseOutpass = detailedOutpass || updatedOutpass;
-
-  // ==========================================================
+  // ----------------------------------------------------------
   // 14. SUCCESS RESPONSE
-  // ==========================================================
+  // ----------------------------------------------------------
 
   return {
     success: true,
 
     message: "Student ENTRY verified successfully.",
 
-    data: buildSecurityResponse(responseOutpass),
+    data: buildSecurityResponse(updatedOutpass),
   };
 };
-
-// ============================================================
-// EXPORT
-// ============================================================
 
 module.exports = Object.freeze({
   verifyEntry,

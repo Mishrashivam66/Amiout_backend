@@ -516,6 +516,42 @@ const outpassSchema = new Schema(
       default: "",
     },
 
+    // ========================================================
+    // PARENT APPROVAL OPTIONAL - FACULTY ACKNOWLEDGEMENT
+    // ========================================================
+
+    parentConsentAcknowledgement: {
+      parentStatusAtApproval: {
+        type: String,
+        enum: ["PENDING", "APPROVED", "REJECTED"],
+        default: null,
+      },
+
+      acknowledgedBy: {
+        type: ObjectId,
+        ref: "Mentor",
+        default: null,
+      },
+
+      acknowledgedRole: {
+        type: String,
+        enum: AUTHORITY_ROLES,
+        default: null,
+      },
+
+      remark: {
+        type: String,
+        trim: true,
+        maxlength: 500,
+        default: "",
+      },
+
+      acknowledgedAt: {
+        type: Date,
+        default: null,
+      },
+    },
+
     rejectionRemark: {
       type: String,
       trim: true,

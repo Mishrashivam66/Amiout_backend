@@ -227,12 +227,18 @@ const validateOutpass = (data = {}) => {
   // 5. EXPECTED IN TIME (OPTIONAL)
   // ==========================================================
 
-  const inTime = data.inTime;
+  // ==========================================================
+  // 5. EXPECTED IN TIME (OPTIONAL)
+  // ==========================================================
 
-  if (inTime !== undefined && inTime !== null && inTime !== "") {
-    if (typeof inTime !== "string") {
+  const rawInTime = data.inTime;
+
+  if (rawInTime !== undefined && rawInTime !== null && rawInTime !== "") {
+    if (typeof rawInTime !== "string") {
       errors.push("Invalid Expected In Time.");
     } else {
+      const inTime = rawInTime.trim();
+
       const selectedInSlot = OUT_TIME_SLOTS.find(
         (slot) => slot.value === inTime,
       );
@@ -241,7 +247,6 @@ const validateOutpass = (data = {}) => {
         errors.push("Invalid Expected In Time selected.");
       } else if (selectedOutSlot) {
         const outMinutes = getSlotMinutes(selectedOutSlot);
-
         const inMinutes = getSlotMinutes(selectedInSlot);
 
         if (outMinutes === null || inMinutes === null) {

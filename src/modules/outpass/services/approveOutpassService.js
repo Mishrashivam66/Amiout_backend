@@ -591,13 +591,27 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
       // STEP 4: PARENT APPROVAL VERIFICATION
       // ======================================================
 
-      if (outpass.isParentRejected()) {
-        errorMessage = "Parent has rejected this outpass.";
+      // ======================================================
+      // STEP 4: PARENT DECISION
+      // Parent confirmation is optional.
+      // Institutional faculty approval is mandatory.
+      // Never falsely mark a parent as APPROVED.
+      // ======================================================
+
+      const parentStatus = outpass.parentDecision?.status || "PENDING";
+
+      if (!["PENDING", "APPROVED", "REJECTED"].includes(parentStatus)) {
+        errorMessage = "Invalid parent decision status.";
         return;
       }
 
-      if (!outpass.hasParentConsent()) {
-        errorMessage = "Verified parent consent is required before approval.";
+      // Explicit parent rejection must be acknowledged.
+      // The rejection itself is never overwritten.
+      if (parentStatus === "REJECTED" && cleanRemark.length < 10) {
+        errorMessage =
+          "Parent has rejected this request. " +
+          "A clear faculty acknowledgement remark " +
+          "of at least 10 characters is required.";
         return;
       }
 
@@ -744,45 +758,38 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
       // STEP 13: PARENT CONSENT CONDITIONAL FILTER
       // ======================================================
 
-      const parentDecision = outpass.parentDecision;
+      // ======================================================
+      // STEP 13: ATOMIC FILTER
+      // Preserve the actual parent decision.
+      // ======================================================
 
       const filter = {
         _id: outpass._id,
-
         status: OUTPASS_STATUS.PENDING,
-
         isDeleted: false,
-
         assignedFaculty: facultyId,
-
         assignedRole: outpass.assignedRole,
-
-        "parentDecision.status": "APPROVED",
-
-        "parentDecision.method": parentDecision.method,
-
-        "parentDecision.decidedAt": parentDecision.decidedAt,
-
+        "parentDecision.status": parentStatus,
         qrGenerated: false,
-
         dailyTripNumber: null,
       };
 
-      if (parentDecision.method === "SMS_LINK") {
-        filter["parentDecision.tokenUsedAt"] = parentDecision.tokenUsedAt;
-      } else if (parentDecision.method === "PHONE_CALL") {
-        filter["parentDecision.callOutcome"] = "CONSENT";
-
-        filter["parentDecision.verifiedByFaculty"] =
-          parentDecision.verifiedByFaculty;
-
-        filter["parentDecision.verifiedByRole"] = parentDecision.verifiedByRole;
-
-        filter["parentDecision.callVerifiedAt"] = parentDecision.callVerifiedAt;
+      // If parent responds while faculty is approving,
+      // reject this update and require a fresh review.
+      if (parentStatus === "PENDING") {
+        filter["parentDecision.decidedAt"] = null;
       } else {
-        errorMessage = "Invalid parent approval method.";
-        return;
+        filter["parentDecision.decidedAt"] = outpass.parentDecision.decidedAt;
+        filter["parentDecision.method"] = outpass.parentDecision.method;
       }
+
+      const parentAcknowledgement = {
+        parentStatusAtApproval: parentStatus,
+        acknowledgedBy: facultyId,
+        acknowledgedRole: outpass.assignedRole,
+        remark: parentStatus === "REJECTED" ? cleanRemark : "",
+        acknowledgedAt: now,
+      };
 
       // ======================================================
       // STEP 14: ATOMIC OUTPASS APPROVAL
@@ -801,6 +808,8 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
             approvedAt: now,
 
             approvalRemark: cleanRemark,
+
+            parentConsentAcknowledgement: parentAcknowledgement,
 
             outpassDayIST: dayKey,
 

@@ -1,12 +1,30 @@
 "use strict";
 
+// ============================================================
+// TEXTBEE SMS PROVIDER - AMIOUT
+// ============================================================
+
 const TEXTBEE_URL = "https://api.textbee.dev/api/v1/gateway/send-sms";
 
-const normalizeNumber = (value) => {
-  const digits = String(value || "").replace(/\D/g, "");
+// ============================================================
+// INDIAN MOBILE NUMBER NORMALIZATION
+// Supports:
+// 9876543210
+// +919876543210
+// 919876543210
+// 09876543210
+// ============================================================
 
-  const mobile =
-    digits.startsWith("91") && digits.length === 12 ? digits.slice(2) : digits;
+const normalizeNumber = (value) => {
+  const digits = String(value ?? "").replace(/\D/g, "");
+
+  let mobile = digits;
+
+  if (digits.length === 12 && digits.startsWith("91")) {
+    mobile = digits.slice(2);
+  } else if (digits.length === 11 && digits.startsWith("0")) {
+    mobile = digits.slice(1);
+  }
 
   if (!/^[6-9]\d{9}$/.test(mobile)) {
     throw new Error("Invalid Indian mobile number.");
@@ -15,10 +33,51 @@ const normalizeNumber = (value) => {
   return `+91${mobile}`;
 };
 
+// ============================================================
+// TEST RECIPIENT ALLOWLIST
+// ============================================================
+
+const validateTestRecipient = (recipient) => {
+  const raw = String(process.env.SMS_TEST_ALLOWED_NUMBERS || "");
+
+  const entries = raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (entries.length === 0) {
+    throw new Error(
+      "SMS_TEST_ALLOWED_NUMBERS is empty. " +
+        "Add an authorized testing number in Vercel.",
+    );
+  }
+
+  const allowedNumbers = entries.map((value) => {
+    try {
+      return normalizeNumber(value);
+    } catch {
+      throw new Error(
+        "Invalid SMS_TEST_ALLOWED_NUMBERS configuration. " +
+          "Replace placeholders with real authorized numbers.",
+      );
+    }
+  });
+
+  if (!allowedNumbers.includes(recipient)) {
+    throw new Error("SMS recipient is not in the testing allowlist.");
+  }
+};
+
+// ============================================================
+// SEND SMS
+// ============================================================
+
 const send = async ({ to, message }) => {
-  const apiKey = process.env.TEXTBEE_API_KEY;
-  const deviceId = process.env.TEXTBEE_DEVICE_ID;
-  const simId = process.env.TEXTBEE_SIM_SUBSCRIPTION_ID;
+  const apiKey = String(process.env.TEXTBEE_API_KEY || "").trim();
+
+  const deviceId = String(process.env.TEXTBEE_DEVICE_ID || "").trim();
+
+  const simId = String(process.env.TEXTBEE_SIM_SUBSCRIPTION_ID ?? "").trim();
 
   if (!apiKey) {
     throw new Error("TEXTBEE_API_KEY is missing.");
@@ -28,18 +87,11 @@ const send = async ({ to, message }) => {
     throw new Error("SMS message cannot be empty.");
   }
 
+  // Normalize the actual StudentMaster parent number.
   const recipient = normalizeNumber(to);
 
-  // Restrict delivery to approved test numbers.
-  const allowedNumbers = String(process.env.SMS_TEST_ALLOWED_NUMBERS || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .map(normalizeNumber);
-
-  if (allowedNumbers.length === 0 || !allowedNumbers.includes(recipient)) {
-    throw new Error("SMS recipient is not in the testing allowlist.");
-  }
+  // Only approved testing numbers can receive SMS.
+  validateTestRecipient(recipient);
 
   const payload = {
     recipients: [recipient],
@@ -50,7 +102,7 @@ const send = async ({ to, message }) => {
     payload.deviceId = deviceId;
   }
 
-  if (simId !== undefined && simId !== "") {
+  if (simId !== "") {
     const subscriptionId = Number(simId);
 
     if (!Number.isSafeInteger(subscriptionId) || subscriptionId < 0) {
@@ -59,6 +111,10 @@ const send = async ({ to, message }) => {
 
     payload.simSubscriptionId = subscriptionId;
   }
+
+  // ==========================================================
+  // TEXTBEE API REQUEST
+  // ==========================================================
 
   let response;
 
@@ -78,7 +134,7 @@ const send = async ({ to, message }) => {
 
   const data = await response.json().catch(() => ({}));
 
-  if (!response.ok || data.success === false) {
+  if (!response.ok || data.success === false || data.data?.success === false) {
     throw new Error(`textbee SMS request failed (HTTP ${response.status}).`);
   }
 
@@ -88,8 +144,10 @@ const send = async ({ to, message }) => {
     delivered: false,
     status: "ACCEPTED",
     messageId: data.data?.smsBatchId || data.smsBatchId || null,
-    message: "SMS accepted by textbee; delivery not yet confirmed.",
+    message: "SMS accepted by textbee; delivery not confirmed.",
   };
 };
 
-module.exports = Object.freeze({ send });
+module.exports = Object.freeze({
+  send,
+});

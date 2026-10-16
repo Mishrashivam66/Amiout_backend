@@ -2,29 +2,61 @@
 
 const crypto = require("node:crypto");
 
+// ============================================================
+// QR CONFIGURATION
+// ============================================================
+
 const QR_TYPE = "AMIOUT_OUTPASS";
 const QR_VERSION = 1;
 
-const QR_SECRET = process.env.OUTPASS_QR_SECRET;
+const IST_TIMEZONE = "Asia/Kolkata";
+
+// AMIOUT Security Gate Verification Window
+const QR_START_TIME = "09:15:00";
+const QR_END_TIME = "17:15:00";
+
+// ============================================================
+// SECRET KEY
+// ============================================================
 
 const getQRSecret = () => {
-  if (!QR_SECRET || Buffer.byteLength(QR_SECRET, "utf8") < 32) {
+  const secret = process.env.OUTPASS_QR_SECRET;
+
+  if (!secret || Buffer.byteLength(secret, "utf8") < 32) {
     throw new Error("OUTPASS_QR_SECRET must contain at least 32 bytes.");
   }
 
-  return QR_SECRET;
+  return secret;
 };
 
-const sign = (data) =>
-  crypto.createHmac("sha256", getQRSecret()).update(data).digest("base64url");
+// ============================================================
+// SIGN QR TOKEN
+// ============================================================
+
+const sign = (data) => {
+  return crypto
+    .createHmac("sha256", getQRSecret())
+    .update(data)
+    .digest("base64url");
+};
+
+// ============================================================
+// GET IST CALENDAR DATE
+// ============================================================
 
 const getISTDay = (date) => {
+  const parsedDate = new Date(date);
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    throw new Error("Invalid outpass date.");
+  }
+
   const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Kolkata",
+    timeZone: IST_TIMEZONE,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).formatToParts(date);
+  }).formatToParts(parsedDate);
 
   const values = Object.fromEntries(
     parts.map(({ type, value }) => [type, value]),
@@ -33,40 +65,76 @@ const getISTDay = (date) => {
   return `${values.year}-${values.month}-${values.day}`;
 };
 
-const getValidityWindow = (outDate) => {
-  const date = new Date(outDate);
+// ============================================================
+// QR VALIDITY WINDOW
+//
+// Valid From : 09:15 AM IST
+// Expires At : 05:15 PM IST
+//
+// Important:
+// The end time is exclusive. QR becomes invalid
+// at exactly 05:15 PM.
+// ============================================================
 
-  if (Number.isNaN(date.getTime())) {
-    throw new Error("Invalid outpass date.");
+const getValidityWindow = (outDate) => {
+  const day = getISTDay(outDate);
+
+  const validFrom = new Date(`${day}T${QR_START_TIME}+05:30`);
+
+  const expiresAt = new Date(`${day}T${QR_END_TIME}+05:30`);
+
+  if (
+    Number.isNaN(validFrom.getTime()) ||
+    Number.isNaN(expiresAt.getTime()) ||
+    validFrom >= expiresAt
+  ) {
+    throw new Error("Invalid QR validity window configuration.");
   }
 
-  const day = getISTDay(date);
-
   return {
-    validFrom: new Date(`${day}T09:15:00+05:30`),
-    expiresAt: new Date(`${day}T18:00:00+05:30`),
+    validFrom,
+    expiresAt,
   };
 };
 
-// Prepare a new signed static QR token.
-// This function DOES NOT update the database.
+// ============================================================
+// CREATE SECURE QR TOKEN
+//
+// Does NOT update database.
+// Caller must save token and validity timestamps.
+//
+// Existing version 1 token structure is preserved.
+// ============================================================
+
 const createQRToken = (outpass, now = new Date()) => {
   if (!outpass?._id || !outpass?.outDate) {
     throw new Error("Outpass ID and date are required.");
   }
 
+  const currentTime = new Date(now);
+
+  if (Number.isNaN(currentTime.getTime())) {
+    throw new Error("Invalid QR issue time.");
+  }
+
   const { validFrom, expiresAt } = getValidityWindow(outpass.outDate);
 
-  if (now >= expiresAt) {
+  // Do not create a QR after the expiry.
+  if (currentTime >= expiresAt) {
     throw new Error("The QR validity window has expired.");
   }
 
   const payload = {
     type: QR_TYPE,
+
     version: QR_VERSION,
+
     outpassId: String(outpass._id),
+
     nonce: crypto.randomBytes(24).toString("base64url"),
-    issuedAt: Math.floor(now.getTime() / 1000),
+
+    issuedAt: Math.floor(currentTime.getTime() / 1000),
+
     expiresAt: Math.floor(expiresAt.getTime() / 1000),
   };
 
@@ -76,29 +144,66 @@ const createQRToken = (outpass, now = new Date()) => {
 
   const signature = sign(encodedPayload);
 
+  const token = `${encodedPayload}.${signature}`;
+
   return {
-    token: `${encodedPayload}.${signature}`,
-    qrGeneratedAt: now,
+    token,
+    qrGeneratedAt: currentTime,
     qrValidFrom: validFrom,
     qrExpiresAt: expiresAt,
   };
 };
 
-// Verify signature and expiry.
-// Database approval/revocation checks are separate.
+// ============================================================
+// VERIFY QR SIGNATURE AND EXPIRY
+//
+// Checks:
+// - Token structure
+// - HMAC SHA256 signature
+// - Payload validity
+// - Token issue timestamp
+// - Token expiry timestamp
+//
+// Database and gate-window checks must also be performed
+// by the security verification service.
+// ============================================================
+
 const verifyQRSignature = (token, now = new Date()) => {
   try {
-    if (typeof token !== "string" || token.length > 4096) {
-      return { valid: false, message: "Invalid QR token." };
+    if (
+      typeof token !== "string" ||
+      token.length > 4096 ||
+      token.length === 0
+    ) {
+      return {
+        valid: false,
+        message: "Invalid QR token.",
+      };
     }
 
     const parts = token.split(".");
 
     if (parts.length !== 2) {
-      return { valid: false, message: "Malformed QR token." };
+      return {
+        valid: false,
+        message: "Malformed QR token.",
+      };
     }
 
     const [encodedPayload, receivedSignature] = parts;
+
+    if (
+      !encodedPayload ||
+      !receivedSignature ||
+      !/^[A-Za-z0-9_-]+$/.test(encodedPayload) ||
+      !/^[A-Za-z0-9_-]+$/.test(receivedSignature)
+    ) {
+      return {
+        valid: false,
+        message: "Malformed QR token.",
+      };
+    }
+
     const expectedSignature = sign(encodedPayload);
 
     const actual = Buffer.from(receivedSignature, "base64url");
@@ -109,7 +214,10 @@ const verifyQRSignature = (token, now = new Date()) => {
       actual.length !== expected.length ||
       !crypto.timingSafeEqual(actual, expected)
     ) {
-      return { valid: false, message: "Invalid QR signature." };
+      return {
+        valid: false,
+        message: "Invalid QR signature.",
+      };
     }
 
     const payload = JSON.parse(
@@ -121,17 +229,40 @@ const verifyQRSignature = (token, now = new Date()) => {
       payload.version !== QR_VERSION ||
       !/^[a-f0-9]{24}$/i.test(payload.outpassId || "") ||
       typeof payload.nonce !== "string" ||
+      payload.nonce.length < 16 ||
       !Number.isSafeInteger(payload.issuedAt) ||
       !Number.isSafeInteger(payload.expiresAt) ||
       payload.issuedAt >= payload.expiresAt
     ) {
-      return { valid: false, message: "Invalid QR payload." };
+      return {
+        valid: false,
+        message: "Invalid QR payload.",
+      };
     }
 
-    const currentTime = Math.floor(now.getTime() / 1000);
+    const currentDate = new Date(now);
+
+    if (Number.isNaN(currentDate.getTime())) {
+      return {
+        valid: false,
+        message: "Invalid verification time.",
+      };
+    }
+
+    const currentTime = Math.floor(currentDate.getTime() / 1000);
 
     if (currentTime >= payload.expiresAt) {
-      return { valid: false, message: "QR has expired." };
+      return {
+        valid: false,
+        message: "QR has expired.",
+      };
+    }
+
+    if (currentTime < payload.issuedAt) {
+      return {
+        valid: false,
+        message: "QR is not yet valid.",
+      };
     }
 
     return {
@@ -146,9 +277,36 @@ const verifyQRSignature = (token, now = new Date()) => {
   }
 };
 
+// ============================================================
+// CHECK CURRENT QR GATE TIME WINDOW
+//
+// Use in Security EXIT / ENTRY verification.
+// ============================================================
+
+const isWithinQRValidityWindow = (outDate, now = new Date()) => {
+  try {
+    const currentTime = new Date(now);
+
+    if (Number.isNaN(currentTime.getTime())) {
+      return false;
+    }
+
+    const { validFrom, expiresAt } = getValidityWindow(outDate);
+
+    return currentTime >= validFrom && currentTime < expiresAt;
+  } catch {
+    return false;
+  }
+};
+
+// ============================================================
+// EXPORTS
+// ============================================================
+
 module.exports = Object.freeze({
   createQRToken,
   verifyQRSignature,
   getValidityWindow,
   getISTDay,
+  isWithinQRValidityWindow,
 });

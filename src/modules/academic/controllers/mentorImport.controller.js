@@ -5,7 +5,6 @@ const XLSX = require("xlsx");
 
 const mentorImportService = require("../services/mentorImport.service");
 
-// Adjust path if mapper is in another folder
 const { mapMentorRows } = require("../utils/mentorExcelMapper");
 
 // ==========================================
@@ -58,28 +57,6 @@ const importMentors = asyncHandler(async (req, res) => {
       });
     }
 
-    console.log("\n========== EXCEL STRUCTURE ==========");
-
-    for (const sheetName of workbook.SheetNames) {
-      const worksheet = workbook.Sheets[sheetName];
-
-      const matrix = XLSX.utils.sheet_to_json(worksheet, {
-        header: 1,
-        defval: "",
-        raw: false,
-        blankrows: true,
-      });
-
-      console.log("SHEET:", sheetName);
-      console.log("TOTAL ROWS:", matrix.length);
-
-      matrix.slice(0, 20).forEach((row, index) => {
-        console.log(`ROW ${index + 1}:`, JSON.stringify(row));
-      });
-    }
-
-    console.log("=====================================\n");
-
     // ======================================
     // NORMALIZE EXCEL HEADERS
     // ======================================
@@ -107,7 +84,6 @@ const importMentors = asyncHandler(async (req, res) => {
     // ======================================
 
     let detectedSheet = null;
-    let detectedHeaderRow = -1;
     let rows = [];
 
     for (const sheetName of workbook.SheetNames) {
@@ -146,8 +122,7 @@ const importMentors = asyncHandler(async (req, res) => {
         continue;
       }
 
-      // Convert matrix row index to actual
-      // worksheet row index.
+      // Convert matrix row index to worksheet row index
       const sheetRange = XLSX.utils.decode_range(worksheet["!ref"]);
 
       const actualHeaderRow = sheetRange.s.r + headerIndex;
@@ -160,7 +135,6 @@ const importMentors = asyncHandler(async (req, res) => {
       });
 
       detectedSheet = sheetName;
-      detectedHeaderRow = actualHeaderRow + 1;
 
       break;
     }
@@ -193,14 +167,6 @@ const importMentors = asyncHandler(async (req, res) => {
     // ======================================
 
     records = mapMentorRows(rows);
-
-    console.log("FACULTY SHEET:", detectedSheet);
-
-    console.log("FACULTY HEADER ROW:", detectedHeaderRow);
-
-    console.log("FACULTY RECORDS:", records.length);
-
-    console.log("MAPPED FIRST RECORD:", JSON.stringify(records[0], null, 2));
   }
 
   // ======================================
@@ -220,8 +186,6 @@ const importMentors = asyncHandler(async (req, res) => {
   // ======================================
 
   const result = await mentorImportService.importMentors(records);
-
-  console.log("FACULTY IMPORT RESULT:", JSON.stringify(result, null, 2));
 
   return res.status(result.summary?.failedRecords > 0 ? 207 : 201).json({
     success: result.success,

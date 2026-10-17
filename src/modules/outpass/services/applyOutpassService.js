@@ -815,13 +815,6 @@ const applyOutpass = async (studentId, payload) => {
 
     smsStatus = smsResult.status;
     smsProvider = smsResult.provider;
-
-    console.log(
-      "AMIOUT parent SMS:",
-      outpass.outpassId,
-      smsProvider,
-      smsStatus,
-    );
   } catch (error) {
     console.error(
       "AMIOUT parent SMS failed:",

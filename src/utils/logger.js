@@ -1,3 +1,5 @@
+"use strict";
+
 // ==========================================
 // LOGGER
 // ==========================================
@@ -6,7 +8,7 @@ const isDev = process.env.NODE_ENV === "development";
 
 const logger = {
   info: (...args) => {
-    if (isDev) console.log("[INFO]", ...args);
+    if (isDev) console.info("[INFO]", ...args);
   },
 
   warn: (...args) => {
@@ -18,7 +20,7 @@ const logger = {
   },
 
   success: (...args) => {
-    if (isDev) console.log("[SUCCESS]", ...args);
+    if (isDev) console.info("[SUCCESS]", ...args);
   },
 };
 

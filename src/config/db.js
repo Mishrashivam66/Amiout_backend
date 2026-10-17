@@ -1,3 +1,5 @@
+"use strict";
+
 const mongoose = require("mongoose");
 
 // ==========================================
@@ -14,25 +16,9 @@ const connectDatabase = async () => {
       dbName: process.env.DB_NAME || undefined,
     });
 
-    console.log(`
-=========================================
-✅ MongoDB Connected Successfully
-=========================================
-Database : ${connection.connection.name}
-Host     : ${connection.connection.host}
-Port     : ${connection.connection.port}
-=========================================
-`);
-
     return connection;
   } catch (error) {
-    console.error(`
-=========================================
-❌ MongoDB Connection Failed
-=========================================
-${error.message}
-=========================================
-`);
+    console.error("MongoDB Connection Failed:", error.message);
 
     throw error;
   }

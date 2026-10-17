@@ -8,16 +8,7 @@ const mappingService = require("./mapping.service");
 
 const runAutomaticMapping = async (source) => {
   try {
-    console.log(`[AMIOUT] Starting mapping after ${source}`);
-
     const result = await mappingService.generateMapping();
-
-    console.log("[AMIOUT] Mapping completed:", {
-      source,
-      totalStudents: result.totalStudents,
-      mapped: result.mapped,
-      failed: result.failed,
-    });
 
     return {
       triggered: true,

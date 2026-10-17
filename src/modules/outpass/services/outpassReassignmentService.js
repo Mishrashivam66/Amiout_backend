@@ -3,7 +3,6 @@
 const mongoose = require("mongoose");
 
 const Outpass = require("../models/Outpass");
-
 const StudentMaster = require("../../academic/models/StudentMaster");
 
 const { resolveOutpassAuthority } = require("./outpassEscalationService");
@@ -47,10 +46,6 @@ const getNotificationRole = (role) => {
   return NOTIFICATION_ROLES[facultyRole] || null;
 };
 
-const logDuration = (outpassId, step, start) => {
-  console.log(`[REASSIGN] ${outpassId} | ${step} | ${Date.now() - start}ms`);
-};
-
 // ============================================================
 // VERIFY STUDENT ACADEMIC SNAPSHOT
 // ============================================================
@@ -81,8 +76,6 @@ const matchesStudentSnapshot = (student, outpass) => {
 // ============================================================
 
 const reassignOnePendingOutpass = async ({ outpass, unavailableFacultyId }) => {
-  const startedAt = Date.now();
-
   const outpassId = outpass?.outpassId || "UNKNOWN";
 
   // ----------------------------------------------------------
@@ -107,15 +100,11 @@ const reassignOnePendingOutpass = async ({ outpass, unavailableFacultyId }) => {
   // 2. STUDENTMASTER LOOKUP
   // ----------------------------------------------------------
 
-  console.log(`[REASSIGN] ${outpassId} | StudentMaster lookup START`);
-
   const studentMaster = await StudentMaster.findOne({
     enrollmentNumber: normalize(outpass.enrollmentNumber),
     isActive: true,
     isDeleted: false,
   }).maxTimeMS(QUERY_TIMEOUT_MS);
-
-  logDuration(outpassId, "StudentMaster lookup DONE", startedAt);
 
   if (!studentMaster) {
     return {
@@ -139,14 +128,10 @@ const reassignOnePendingOutpass = async ({ outpass, unavailableFacultyId }) => {
   // 4. RESOLVE NEXT ELIGIBLE AUTHORITY
   // ----------------------------------------------------------
 
-  console.log(`[REASSIGN] ${outpassId} | Authority resolution START`);
-
   const authority = await resolveOutpassAuthority({
     studentMaster,
     now: new Date(),
   });
-
-  logDuration(outpassId, "Authority resolution DONE", startedAt);
 
   if (!authority?.success) {
     return {
@@ -181,49 +166,39 @@ const reassignOnePendingOutpass = async ({ outpass, unavailableFacultyId }) => {
 
   const now = new Date();
 
-  console.log(`[REASSIGN] ${outpassId} | Database update START`);
-
   const updated = await Outpass.findOneAndUpdate(
     {
       _id: outpass._id,
       status: "PENDING",
       isDeleted: false,
-
       assignedFaculty: unavailableFacultyId,
-
       assignedRole: outpass.assignedRole,
-
       approvedAt: null,
     },
     {
       $set: {
         assignedFaculty: nextFaculty._id,
-
         assignedRole: nextRole,
 
-        // Legacy compatibility.
+        // Legacy compatibility
         mentor: nextFaculty._id,
 
         facultyAssignmentEmailStatus: "NOT_SENT",
-
         facultyAssignmentEmailSentAt: null,
       },
 
       $push: {
         assignmentHistory: {
           fromFaculty: unavailableFacultyId,
-
           toFaculty: nextFaculty._id,
 
           fromRole: outpass.assignedRole,
-
           toRole: nextRole,
 
           reason: "FACULTY_UNAVAILABLE",
 
-          // System-initiated reassignment.
+          // System-initiated reassignment
           transferredBy: null,
-
           transferredAt: now,
 
           remarks:
@@ -238,8 +213,6 @@ const reassignOnePendingOutpass = async ({ outpass, unavailableFacultyId }) => {
       runValidators: true,
     },
   ).maxTimeMS(QUERY_TIMEOUT_MS);
-
-  logDuration(outpassId, "Database update DONE", startedAt);
 
   if (!updated) {
     return {
@@ -259,8 +232,6 @@ const reassignOnePendingOutpass = async ({ outpass, unavailableFacultyId }) => {
   const notificationRole = getNotificationRole(nextRole);
 
   if (notificationRole) {
-    console.log(`[REASSIGN] ${outpassId} | Notification START`);
-
     try {
       await sendNotification({
         title: "Outpass Reassigned",
@@ -272,11 +243,8 @@ const reassignOnePendingOutpass = async ({ outpass, unavailableFacultyId }) => {
         type: NOTIFICATION_TYPES.OUTPASS_SUBMITTED,
 
         sender: null,
-
         receiver: nextFaculty._id,
-
         role: notificationRole,
-
         relatedOutpass: updated._id,
       });
 
@@ -286,8 +254,6 @@ const reassignOnePendingOutpass = async ({ outpass, unavailableFacultyId }) => {
 
       console.error(`[REASSIGN] ${outpassId} | Notification ERROR`, error);
     }
-
-    logDuration(outpassId, "Notification finished", startedAt);
   } else {
     notificationError = "Notification role is not configured.";
   }
@@ -296,19 +262,12 @@ const reassignOnePendingOutpass = async ({ outpass, unavailableFacultyId }) => {
   // 7. RESULT
   // ----------------------------------------------------------
 
-  logDuration(outpassId, "Reassignment finished", startedAt);
-
   return {
     status: "REASSIGNED",
-
     outpassId: updated.outpassId,
-
     assignedRole: nextRole,
-
     assignedFaculty: getId(nextFaculty._id),
-
     notificationSent,
-
     notificationError,
   };
 };
@@ -324,8 +283,6 @@ const reassignPendingOutpasses = async (facultyId) => {
     throw new Error("Invalid faculty ID.");
   }
 
-  const startedAt = Date.now();
-
   const summary = {
     scanned: 0,
     reassigned: 0,
@@ -334,8 +291,6 @@ const reassignPendingOutpasses = async (facultyId) => {
     notificationFailures: 0,
     errors: [],
   };
-
-  console.log("[REASSIGN] START", String(facultyId));
 
   let lastId = null;
 
@@ -360,8 +315,6 @@ const reassignPendingOutpasses = async (facultyId) => {
       };
     }
 
-    console.log("[REASSIGN] Loading next batch");
-
     const batch = await Outpass.find(query)
       .select(
         "_id outpassId enrollmentNumber " +
@@ -381,8 +334,6 @@ const reassignPendingOutpasses = async (facultyId) => {
     }
 
     lastId = batch[batch.length - 1]._id;
-
-    console.log("[REASSIGN] Batch loaded:", batch.length);
 
     // --------------------------------------------------------
     // PROCESS IN SMALL CONCURRENT GROUPS
@@ -415,7 +366,6 @@ const reassignPendingOutpasses = async (facultyId) => {
 
           summary.errors.push({
             outpassId: outpass.outpassId,
-
             reason: outcome.reason?.message || "Reassignment failed.",
           });
 
@@ -443,37 +393,21 @@ const reassignPendingOutpasses = async (facultyId) => {
 
           summary.errors.push({
             outpassId: outpass.outpassId,
-
             reason: result?.reason || "Unable to find eligible faculty.",
           });
         }
       }
     }
 
-    // Query the next page only after this batch
-    // has finished. This also avoids overlapping
-    // updates within the same iteration.
+    // Query the next page after the current batch
+    // finishes to avoid overlapping updates.
   }
-
-  console.log("[REASSIGN] COMPLETED", {
-    durationMs: Date.now() - startedAt,
-
-    scanned: summary.scanned,
-
-    reassigned: summary.reassigned,
-
-    skipped: summary.skipped,
-
-    unresolved: summary.unresolved,
-
-    notificationFailures: summary.notificationFailures,
-  });
 
   return summary;
 };
 
 // ============================================================
-// EXPORT
+// EXPORTS
 // ============================================================
 
 module.exports = Object.freeze({

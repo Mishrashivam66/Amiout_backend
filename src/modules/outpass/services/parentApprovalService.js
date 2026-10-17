@@ -3,11 +3,9 @@
 const crypto = require("node:crypto");
 
 const Outpass = require("../models/Outpass");
-
 const authRepository = require("../../auth/repositories/auth.repository");
 
 const { sendEmail } = require("../../auth/utils/email");
-
 const { createQRToken, getValidityWindow } = require("./qrService");
 
 // ============================================================
@@ -15,7 +13,6 @@ const { createQRToken, getValidityWindow } = require("./qrService");
 // ============================================================
 
 const TOKEN_BYTES = 32;
-
 const PARENT_ACTIONABLE_STATUSES = ["PENDING", "APPROVED"];
 
 // ============================================================
@@ -144,7 +141,6 @@ const notifyStudentOfParentDecision = async ({
       padding:24px;
       color:#172033;
     ">
-
       <h2 style="color:#087f5b;">
         AMIOUT - Parent Approval Update
       </h2>
@@ -163,7 +159,6 @@ const notifyStudentOfParentDecision = async ({
         border-radius:8px;
         margin:20px 0;
       ">
-
         <p>
           <strong>Outpass ID:</strong>
           ${escapeHtml(outpass.outpassId)}
@@ -178,7 +173,6 @@ const notifyStudentOfParentDecision = async ({
           <strong>Parent Decision:</strong>
           ${approved ? "Approved by Parent" : "Rejected by Parent"}
         </p>
-
       </div>
 
       <p>
@@ -194,7 +188,6 @@ const notifyStudentOfParentDecision = async ({
         Regards,<br />
         <strong>AMIOUT Team</strong>
       </p>
-
     </div>
   `;
 
@@ -211,19 +204,12 @@ const notifyStudentOfParentDecision = async ({
 
 // ============================================================
 // CREATE SECURE PARENT APPROVAL TOKEN
-//
-// FIX:
-// Parent can respond when faculty approval is
-// PENDING or already APPROVED.
-//
-// Parent status must still be PENDING.
 // ============================================================
 
 const createParentApprovalToken = async (outpassId) => {
   const token = crypto.randomBytes(TOKEN_BYTES).toString("hex");
 
   const tokenHash = hashToken(token);
-
   const now = new Date();
 
   const expiresAt = new Date(now.getTime() + getExpiryMinutes() * 60 * 1000);
@@ -237,15 +223,12 @@ const createParentApprovalToken = async (outpassId) => {
       },
 
       "parentDecision.status": "PENDING",
-
       isDeleted: false,
     },
     {
       $set: {
         "parentDecision.tokenHash": tokenHash,
-
         "parentDecision.tokenExpiresAt": expiresAt,
-
         "parentDecision.tokenUsedAt": null,
       },
     },
@@ -259,8 +242,8 @@ const createParentApprovalToken = async (outpassId) => {
     throw createError("Parent approval link cannot be generated.", 409);
   }
 
-  // Raw token is returned only to the trusted
-  // caller that sends the parent SMS.
+  // Raw token is returned only to the trusted caller
+  // responsible for sending the parent SMS.
 
   return {
     token,
@@ -270,8 +253,6 @@ const createParentApprovalToken = async (outpassId) => {
 
 // ============================================================
 // REVIEW OUTPASS THROUGH SECURE PARENT LINK
-//
-// Works even after faculty approval.
 // ============================================================
 
 const reviewOutpass = async (token) => {
@@ -285,7 +266,6 @@ const reviewOutpass = async (token) => {
     },
 
     "parentDecision.tokenUsedAt": null,
-
     "parentDecision.status": "PENDING",
 
     status: {
@@ -304,28 +284,6 @@ const reviewOutpass = async (token) => {
     .lean();
 
   if (!outpass) {
-    const record = await Outpass.findOne({
-      "parentDecision.tokenHash": tokenHash,
-    })
-      .select(
-        "outpassId status isDeleted " +
-          "parentDecision.status " +
-          "parentDecision.tokenExpiresAt " +
-          "parentDecision.tokenUsedAt",
-      )
-      .lean();
-
-    console.log("[AMIOUT PARENT LINK DEBUG]", {
-      tokenMatched: Boolean(record),
-      outpassStatus: record?.status || null,
-      parentStatus: record?.parentDecision?.status || null,
-      linkExpired: record?.parentDecision?.tokenExpiresAt
-        ? new Date(record.parentDecision.tokenExpiresAt).getTime() <= Date.now()
-        : null,
-      linkUsed: Boolean(record?.parentDecision?.tokenUsedAt),
-      isDeleted: record?.isDeleted === true,
-    });
-
     throw createError(
       "This approval link is invalid, expired or already used.",
       410,
@@ -334,19 +292,12 @@ const reviewOutpass = async (token) => {
 
   return {
     outpassId: outpass.outpassId,
-
     studentName: outpass.studentName,
-
     enrollmentNumber: outpass.enrollmentNumber,
-
     outDate: outpass.outDate,
-
     outTime: outpass.outTime,
-
     inTime: outpass.inTime || null,
-
     destination: outpass.destination,
-
     reason: outpass.reason,
 
     parentStatus: "PENDING",
@@ -360,14 +311,6 @@ const reviewOutpass = async (token) => {
 
 // ============================================================
 // PARENT APPROVE / REJECT
-//
-// Parent first  -> Wait for faculty approval.
-//
-// Faculty first -> Parent consent completes the
-//                  approval requirements and
-//                  triggers QR generation.
-//
-// Rejection     -> QR never becomes usable.
 // ============================================================
 
 const submitParentDecision = async (token, decision) => {
@@ -381,8 +324,7 @@ const submitParentDecision = async (token, decision) => {
     throw createError("Decision must be APPROVED or REJECTED.", 400);
   }
 
-  // Retry if faculty approval changes
-  // the request during parent submission.
+  // Retry if faculty approval changes during parent submission.
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const now = new Date();
@@ -399,7 +341,6 @@ const submitParentDecision = async (token, decision) => {
       },
 
       "parentDecision.tokenUsedAt": null,
-
       "parentDecision.status": "PENDING",
 
       status: {
@@ -432,13 +373,10 @@ const submitParentDecision = async (token, decision) => {
       Boolean(outpass.approvedByFaculty);
 
     let qr = null;
-
     let qrStatus = "AWAITING_FACULTY";
 
     // ========================================================
     // STEP 3: GENERATE QR CONDITIONALLY
-    //
-    // Parent approval + Faculty approval required.
     // ========================================================
 
     if (normalizedDecision === "APPROVED") {
@@ -455,7 +393,6 @@ const submitParentDecision = async (token, decision) => {
           console.error("AMIOUT: Invalid QR validity window:", error.message);
 
           qrStatus = "QR_ISSUANCE_PENDING";
-
           expired = true;
         }
 
@@ -466,7 +403,6 @@ const submitParentDecision = async (token, decision) => {
         } else {
           try {
             qr = createQRToken(outpass, now);
-
             qrStatus = "READY";
           } catch (error) {
             console.error(
@@ -484,32 +420,18 @@ const submitParentDecision = async (token, decision) => {
 
     // ========================================================
     // STEP 4: PREPARE VERIFIED DECISION
-    //
-    // SMS consent requires:
-    // status APPROVED, method SMS_LINK,
-    // decidedAt and tokenUsedAt.
-    //
-    // Old prematurely generated QR is cleared or
-    // replaced with a newly signed QR.
     // ========================================================
 
     const updates = {
       "parentDecision.status": normalizedDecision,
-
       "parentDecision.method": "SMS_LINK",
-
       "parentDecision.decidedAt": now,
-
       "parentDecision.tokenUsedAt": now,
 
       qrGenerated: Boolean(qr),
-
       qrGeneratedAt: qr?.qrGeneratedAt || null,
-
       qrToken: qr?.token || null,
-
       qrValidFrom: qr?.qrValidFrom || null,
-
       qrExpiresAt: qr?.qrExpiresAt || null,
 
       qrRevokedAt: normalizedDecision === "REJECTED" ? now : null,
@@ -517,11 +439,6 @@ const submitParentDecision = async (token, decision) => {
 
     // ========================================================
     // STEP 5: ATOMIC FILTER
-    //
-    // Prevent:
-    // - Duplicate parent decisions
-    // - Expired token usage
-    // - Approval-state race conditions
     // ========================================================
 
     const filter = {
@@ -534,15 +451,12 @@ const submitParentDecision = async (token, decision) => {
       },
 
       "parentDecision.tokenUsedAt": null,
-
       "parentDecision.status": "PENDING",
 
       status: outpass.status,
-
       isDeleted: false,
 
       approvedAt: outpass.approvedAt || null,
-
       approvedByFaculty: outpass.approvedByFaculty || null,
     };
 
@@ -587,32 +501,21 @@ const submitParentDecision = async (token, decision) => {
     }
 
     if (!updated) {
-      // Faculty approval may have been
-      // committed concurrently.
-      // Recheck the new state.
+      // Faculty approval may have been committed concurrently.
+      // Recheck the updated state.
       continue;
     }
 
     // ========================================================
     // STEP 7: NOTIFY STUDENT
-    //
-    // Email failure must not undo parent consent.
     // ========================================================
 
     try {
       await notifyStudentOfParentDecision({
         outpass: updated,
-
         decision: normalizedDecision,
-
         qrStatus,
       });
-
-      console.log(
-        "Parent decision email processed:",
-        updated.outpassId,
-        normalizedDecision,
-      );
     } catch (error) {
       console.error(
         "AMIOUT parent decision email failed:",
@@ -644,7 +547,6 @@ const submitParentDecision = async (token, decision) => {
 
     return {
       outpassId: updated.outpassId,
-
       parentStatus: updated.parentDecision.status,
 
       facultyApprovalStatus:
@@ -655,11 +557,8 @@ const submitParentDecision = async (token, decision) => {
           : "PENDING",
 
       qrGenerated: updated.qrGenerated === true,
-
       qrStatus,
-
       decidedAt: updated.parentDecision.decidedAt,
-
       message,
     };
   }

@@ -1,48 +1,38 @@
 "use strict";
 
 const express = require("express");
-
 const router = express.Router();
 
 const mentorController = require("../controllers/mentorController");
 
 const { protect } = require("../../../middlewares/auth.middleware");
-
 const authorize = require("../../../middlewares/role.middleware");
-
 const ROLES = require("../../auth/constants/roles");
 
-// ============================================================
-// COORDINATOR AUTHENTICATION
-// ============================================================
-
+// Coordinator authentication
 router.use(protect);
-
-// Verify Coordinator access.
-// The service independently verifies the faculty's
-// active SECTION role assignment and academic scope.
 router.use(authorize(ROLES.COORDINATOR));
 
-// ============================================================
-// COORDINATOR DASHBOARD
-// ============================================================
-
+// Dashboard and students
 router.get("/dashboard", mentorController.getCoordinatorDashboard);
-
-// ============================================================
-// COORDINATOR STUDENTS
-// ============================================================
-
 router.get("/students", mentorController.getCoordinatorStudents);
 
-// ============================================================
-// FACULTY PROFILE
-// ============================================================
+// Pending outpasses
+router.get("/outpass/pending", mentorController.getCoordinatorPendingRequests);
 
+// History
+router.get("/history", mentorController.getCoordinatorHistory);
+
+// Outpass details
+router.get(
+  "/outpass/:outpassId",
+  mentorController.getCoordinatorOutpassDetails,
+);
+
+// Approval: existing service validates actual assigned authority
+router.patch("/outpass/:outpassId/approve", mentorController.approveOutpass);
+
+// Profile
 router.get("/profile", mentorController.getProfile);
-
-// ============================================================
-// EXPORT
-// ============================================================
 
 module.exports = router;

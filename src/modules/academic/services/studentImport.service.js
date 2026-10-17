@@ -127,7 +127,7 @@ const resolveInstitute = async (instituteCode) => {
       isDeleted: false,
     });
 
-    console.log(`Institute created automatically: ${code}`);
+
 
     return institute;
   } catch (error) {

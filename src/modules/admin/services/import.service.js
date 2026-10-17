@@ -25,16 +25,8 @@ const processImport = async ({
 
   const parsed = parseExcel(file);
 
-  console.log("================================");
-  console.log("HEADERS");
-  console.log(parsed.headers);
-
-  console.log("================================");
-  console.log("FIRST ROW");
-  console.log(parsed.data[0]);
-
   // ==========================================================
-  // Validate
+  // Validate Excel
   // ==========================================================
 
   const validation = validateExcel({
@@ -42,11 +34,7 @@ const processImport = async ({
     requiredColumns,
     uniqueField,
   });
-  console.log("VALIDATION SUMMARY");
-  console.log(validation.summary);
 
-  console.log("VALIDATION ERRORS");
-  console.log(validation.validationErrors.slice(0, 10));
   // ==========================================================
   // Processing Time
   // ==========================================================
@@ -86,13 +74,12 @@ const processImport = async ({
       userAgent,
     });
   } catch (err) {
-    console.error("========== IMPORT HISTORY ERROR ==========");
-    console.error(err);
+    console.error("Import History Error:", err);
     throw err;
   }
 
   // ==========================================================
-  // Return
+  // Return Import Result
   // ==========================================================
 
   return {
@@ -119,7 +106,7 @@ const getImportHistory = async (limit = 20) => {
 };
 
 // ============================================================================
-// Get Single History
+// Get Single Import History
 // ============================================================================
 
 const getImportHistoryById = async (id) => {

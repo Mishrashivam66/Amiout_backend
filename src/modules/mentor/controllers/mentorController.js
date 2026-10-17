@@ -5,7 +5,7 @@ const asyncHandler = require("express-async-handler");
 const mentorDashboardService = require("../services/mentorDashboardService");
 
 const outpassService = require("../../outpass/services");
-
+const coordinatorOutpassService = require("../services/coordinatorOutpassService");
 // ============================================================
 // HELPERS
 // ============================================================
@@ -243,20 +243,10 @@ const updateAvailability = asyncHandler(async (req, res) => {
     });
   }
 
-  console.log("[AVAILABILITY CONTROLLER] Request received:", {
-    facultyId: String(facultyId),
-    availabilityStatus,
-  });
-
   const result = await mentorDashboardService.updateAvailability(
     facultyId,
     availabilityStatus,
   );
-
-  console.log("[AVAILABILITY CONTROLLER] Service completed:", {
-    success: result?.success,
-    reassignmentComplete: result?.data?.reassignmentComplete,
-  });
 
   return res.status(result?.success ? 200 : 400).json(result);
 });
@@ -283,7 +273,36 @@ const getProfile = asyncHandler(async (req, res) => {
 // ============================================================
 // EXPORTS
 // ============================================================
+const getCoordinatorPendingRequests = asyncHandler(async (req, res) => {
+  const result = await coordinatorOutpassService.getCoordinatorPendingRequests(
+    getFacultyId(req),
+    req.query.page,
+    req.query.limit,
+    req.query.search,
+  );
 
+  return sendServiceResult(res, result);
+});
+
+const getCoordinatorHistory = asyncHandler(async (req, res) => {
+  const result = await coordinatorOutpassService.getCoordinatorHistory(
+    getFacultyId(req),
+    req.query.page,
+    req.query.limit,
+    req.query.search,
+  );
+
+  return sendServiceResult(res, result);
+});
+
+const getCoordinatorOutpassDetails = asyncHandler(async (req, res) => {
+  const result = await coordinatorOutpassService.getCoordinatorOutpassDetails(
+    getFacultyId(req),
+    req.params.outpassId,
+  );
+
+  return sendServiceResult(res, result, 404);
+});
 module.exports = Object.freeze({
   // Dashboards
   getDashboard,
@@ -305,6 +324,9 @@ module.exports = Object.freeze({
   // History and details
   getHistory,
   getOutpassDetails,
+  getCoordinatorPendingRequests,
+  getCoordinatorHistory,
+  getCoordinatorOutpassDetails,
 
   // Faculty profile
   getProfile,

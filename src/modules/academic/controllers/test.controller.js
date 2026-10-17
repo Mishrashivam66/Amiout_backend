@@ -3,9 +3,6 @@
 const XLSX = require("xlsx");
 
 const testExcel = async (req, res) => {
-  console.log("========== TEST ==========");
-  console.log("req.file =", req.file);
-
   if (!req.file) {
     return res.status(400).json({
       success: false,
@@ -16,13 +13,13 @@ const testExcel = async (req, res) => {
   try {
     let workbook;
 
-    // Vercel
+    // Vercel: Memory Storage
     if (req.file.buffer) {
       workbook = XLSX.read(req.file.buffer, {
         type: "buffer",
       });
     }
-    // Local
+    // Local: Disk Storage
     else {
       workbook = XLSX.readFile(req.file.path);
     }
@@ -43,7 +40,7 @@ const testExcel = async (req, res) => {
       firstRow: rows[0],
     });
   } catch (err) {
-    console.error(err);
+    console.error("Excel upload error:", err);
 
     return res.status(500).json({
       success: false,

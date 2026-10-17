@@ -5,7 +5,7 @@ const mongoose = require("mongoose");
 
 const Outpass = require("../models/Outpass");
 
-const { verifyQRSignature } = require("../services/qrService");
+const { verifyQRSignature, createQRToken } = require("../services/qrService");
 
 // ============================================================
 // AUTHORIZED UNIVERSITY APPROVAL ROLES
@@ -70,7 +70,7 @@ const getStudentQR = asyncHandler(async (req, res) => {
         outpassId,
       };
 
-  const outpass = await Outpass.findOne({
+  let outpass = await Outpass.findOne({
     ...lookup,
     student: studentId,
     isDeleted: false,
@@ -158,6 +158,90 @@ const getStudentQR = asyncHandler(async (req, res) => {
       success: false,
       message: "University approval role is missing or unauthorized.",
     });
+  }
+
+  // ============================================================
+  // RECOVER MISSING QR FOR AN ALREADY APPROVED OUTPASS
+  // Temporary recovery for old approved records.
+  // Parent PENDING is allowed; REJECTED is blocked above.
+  // ============================================================
+
+  if (
+    outpass.status === "APPROVED" &&
+    outpass.qrGenerated === false &&
+    !outpass.qrToken &&
+    !outpass.qrRevokedAt
+  ) {
+    let qr;
+
+    try {
+      qr = createQRToken(outpass, new Date());
+    } catch (error) {
+      return res.status(403).json({
+        success: false,
+        message: error.message || "QR generation failed.",
+      });
+    }
+
+    const repaired = await Outpass.findOneAndUpdate(
+      {
+        _id: outpass._id,
+        student: studentId,
+        isDeleted: false,
+        status: "APPROVED",
+
+        approvedByFaculty: outpass.approvedByFaculty,
+        approvedAt: outpass.approvedAt,
+        approvedAuthorityRole: outpass.approvedAuthorityRole,
+
+        "parentDecision.status": parentStatus,
+
+        qrGenerated: false,
+        qrToken: null,
+        qrValidFrom: null,
+        qrExpiresAt: null,
+        qrRevokedAt: null,
+      },
+      {
+        $set: {
+          qrGenerated: true,
+          qrGeneratedAt: qr.qrGeneratedAt,
+          qrToken: qr.token,
+          qrValidFrom: qr.qrValidFrom,
+          qrExpiresAt: qr.qrExpiresAt,
+        },
+      },
+      {
+        new: true,
+        runValidators: true,
+      },
+    ).select("+qrToken");
+
+    if (repaired) {
+      outpass = repaired;
+    } else {
+      // Another request may have issued the QR first,
+      // or the outpass may have changed.
+      outpass = await Outpass.findOne({
+        _id: outpass._id,
+        student: studentId,
+        isDeleted: false,
+      }).select("+qrToken");
+
+      if (!outpass) {
+        return res.status(404).json({
+          success: false,
+          message: "Outpass no longer exists.",
+        });
+      }
+
+      if (outpass.parentDecision?.status === "REJECTED") {
+        return res.status(403).json({
+          success: false,
+          message: "Parent has rejected this outpass.",
+        });
+      }
+    }
   }
 
   // ==========================================================

@@ -1,9 +1,7 @@
 "use strict";
 
 const Mentor = require("../../auth/models/Mentor");
-
 const MentorMaster = require("../../academic/models/MentorMaster");
-
 const StudentMaster = require("../../academic/models/StudentMaster");
 
 const Group = require("../../academic/models/Group");
@@ -49,10 +47,6 @@ const success = (faculty, assignedRole, reason) => ({
   assignedRole,
   reason,
 });
-
-const logStep = (step, startedAt) => {
-  console.log(`[AUTHORITY RESOLVER] ${step} | ${Date.now() - startedAt}ms`);
-};
 
 // ============================================================
 // CHECK ACCOUNT AVAILABILITY
@@ -163,7 +157,7 @@ const buildScopes = ({ institute, program, studentMaster }) => {
 
     coordinator: `${instituteCode}/${programCode}/` + `${semester}/${section}`,
 
-    // No HOD matching without an official department.
+    // No HOD matching without official department
     hod: departmentCode ? `${instituteCode}/${departmentCode}` : null,
 
     hoi: instituteCode,
@@ -175,8 +169,6 @@ const buildScopes = ({ institute, program, studentMaster }) => {
 // ============================================================
 
 const getAcademicContext = async (studentMaster) => {
-  const startedAt = Date.now();
-
   if (
     !studentMaster ||
     !studentMaster.institute ||
@@ -195,8 +187,6 @@ const getAcademicContext = async (studentMaster) => {
 
     Group.findById(studentMaster.mentorGroup).maxTimeMS(QUERY_TIMEOUT_MS),
   ]);
-
-  logStep("Academic records fetched", startedAt);
 
   if (
     !institute ||
@@ -246,8 +236,6 @@ const getAcademicContext = async (studentMaster) => {
   if (!scopes) {
     return null;
   }
-
-  logStep("Academic mapping validated", startedAt);
 
   return {
     institute,
@@ -322,8 +310,9 @@ const getMappedMentor = async ({
     return null;
   }
 
-  // Account must correspond to the official master email.
+  // Account must correspond to official master email.
   // Do not link another faculty merely by ObjectId.
+
   const emailMatches =
     Boolean(master.mentorEmail) &&
     String(master.mentorEmail).trim().toLowerCase() ===
@@ -363,8 +352,8 @@ const getMappedMentor = async ({
 // ============================================================
 // SUPERIOR AUTHORITY LOOKUP
 //
-// Only fetch faculty with an active matching role assignment.
-// Do not fetch the entire faculty collection.
+// Only fetch faculty with active matching role assignment.
+// Do not fetch entire faculty collection.
 // ============================================================
 
 const findSuperior = async ({ role, scope, now = new Date() }) => {
@@ -378,11 +367,10 @@ const findSuperior = async ({ role, scope, now = new Date() }) => {
     };
   }
 
-  const startedAt = Date.now();
+  // Scope IDs must use canonical format.
+  // $elemMatch ensures role, scope and active flag
+  // belong to the same assignment.
 
-  // Scope IDs must use the canonical format shown above.
-  // $elemMatch makes sure role, scope and active flag
-  // belong to the SAME assignment.
   const candidates = await Mentor.find({
     roles: normalizedRole,
 
@@ -402,9 +390,8 @@ const findSuperior = async ({ role, scope, now = new Date() }) => {
     .limit(20)
     .maxTimeMS(QUERY_TIMEOUT_MS);
 
-  logStep(`${normalizedRole} candidate query completed`, startedAt);
+  // Recheck startsAt / expiresAt and exact scope
 
-  // Recheck startsAt / expiresAt and exact scope.
   const matches = candidates.filter((faculty) =>
     hasExactScope(faculty, normalizedRole, expectedScope, now),
   );
@@ -424,13 +411,12 @@ const findSuperior = async ({ role, scope, now = new Date() }) => {
 
 // ============================================================
 // MAIN APPROVAL AUTHORITY RESOLVER
+//
 // Strict precedence:
 // PRIMARY -> BACKUP -> COORDINATOR -> HOD -> HOI
 // ============================================================
 
 const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
-  const startedAt = Date.now();
-
   // ----------------------------------------------------------
   // 1. VERIFY ACADEMIC CONTEXT
   // ----------------------------------------------------------
@@ -442,8 +428,6 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
   }
 
   const { institute, program, scopes } = context;
-
-  logStep("Academic context resolved", startedAt);
 
   // ----------------------------------------------------------
   // 2. PRIMARY MENTOR
@@ -458,8 +442,6 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
     now,
     isBackup: false,
   });
-
-  logStep("Primary Mentor checked", startedAt);
 
   if (!primary) {
     return fail(
@@ -484,8 +466,6 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
     now,
     isBackup: true,
   });
-
-  logStep("Backup Mentor checked", startedAt);
 
   if (!backup) {
     return fail(
@@ -517,8 +497,6 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
     now,
   });
 
-  logStep("Coordinator checked", startedAt);
-
   if (coordinator.ambiguous) {
     return fail("Multiple available Coordinators match this section.");
   }
@@ -547,8 +525,6 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
     now,
   });
 
-  logStep("HOD checked", startedAt);
-
   if (hod.ambiguous) {
     return fail("Multiple available HOD accounts match this department.");
   }
@@ -567,8 +543,6 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
     now,
   });
 
-  logStep("HOI checked", startedAt);
-
   if (hoi.ambiguous) {
     return fail("Multiple available HOI accounts match this institute.");
   }
@@ -576,8 +550,6 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
   if (hoi.faculty) {
     return success(hoi.faculty, "HOI", "HOD_UNAVAILABLE");
   }
-
-  logStep("No authorized authority found", startedAt);
 
   return fail(
     "No authorized faculty is currently available. Administrative review is required.",

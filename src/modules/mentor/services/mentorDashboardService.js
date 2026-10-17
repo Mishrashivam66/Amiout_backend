@@ -8,8 +8,8 @@ const { OUTPASS_STATUS } = require("../../outpass/constants/outpassStatus");
 const {
   reassignPendingOutpasses,
 } = require("../../outpass/services/outpassReassignmentService");
-const Mentor = require("../../auth/models/Mentor");
 
+const Mentor = require("../../auth/models/Mentor");
 const MentorMaster = require("../../academic/models/MentorMaster");
 
 const ROLE_SCOPES = {
@@ -58,10 +58,6 @@ const isAssignmentActive = (assignment, now) => {
 
   return true;
 };
-
-// ============================================================
-// DASHBOARD
-// ============================================================
 
 // ============================================================
 // MENTOR DASHBOARD
@@ -293,6 +289,7 @@ const getProfile = async (mentorId) => {
 
   // Read only records explicitly linked to this account.
   // Do not link accounts using a matching email alone.
+
   const masterRecords = await MentorMaster.find({
     mentorUser: mentor._id,
     isActive: true,
@@ -307,6 +304,7 @@ const getProfile = async (mentorId) => {
 
   // One faculty may have several MentorMaster records
   // for different groups/sections.
+
   const firstMaster = masterRecords[0] || null;
 
   const academicAssignments = masterRecords.map((record) => ({
@@ -343,8 +341,9 @@ const getProfile = async (mentorId) => {
       expiresAt: assignment.expiresAt || null,
     }));
 
-  // Display eligible role choices; actual APIs must
-  // independently enforce role + academic scope.
+  // Display eligible role choices.
+  // Actual APIs independently enforce role + academic scope.
+
   const authorizedRoles =
     mentor.isVerified === true
       ? [...new Set(activeRoleAssignments.map((assignment) => assignment.role))]
@@ -355,24 +354,16 @@ const getProfile = async (mentorId) => {
     data: {
       faculty: {
         name: firstMaster?.name || mentor.name || "",
-
         email: firstMaster?.mentorEmail || mentor.email || "",
-
         facultyId: firstMaster?.facultyId || mentor.employeeId || "",
-
         designation: firstMaster?.designation || mentor.designation || "",
-
         institute: firstMaster?.institute || "",
-
         department: firstMaster?.department || mentor.department || "",
-
         phone: mentor.phone || "",
       },
 
       academicAssignments,
-
       authorizedRoles,
-
       roleAssignments: activeRoleAssignments,
 
       account: {
@@ -430,8 +421,6 @@ const updateAvailability = async (mentorId, availabilityStatus) => {
     };
   }
 
-  console.log("[AVAILABILITY] Looking up faculty");
-
   const mentor = await Mentor.findById(mentorId);
 
   if (!mentor) {
@@ -453,13 +442,7 @@ const updateAvailability = async (mentorId, availabilityStatus) => {
   mentor.availabilityStatus = nextStatus;
   mentor.availabilityUpdatedAt = now;
 
-  console.log("[AVAILABILITY] Before mentor.save()");
-
   await mentor.save();
-
-  console.log("[AVAILABILITY] After mentor.save()");
-
-  console.log("[AVAILABILITY] Saved:", nextStatus);
 
   if (nextStatus === "AVAILABLE") {
     return {
@@ -475,12 +458,9 @@ const updateAvailability = async (mentorId, availabilityStatus) => {
 
   // Mentor is UNAVAILABLE.
   // Transfer all pending assigned requests.
+
   try {
-    console.log("[AVAILABILITY] Starting reassignment");
-
     const summary = await reassignPendingOutpasses(mentor._id);
-
-    console.log("[AVAILABILITY] Reassignment completed", summary);
 
     const complete = summary.unresolved === 0 && summary.skipped === 0;
 
@@ -489,6 +469,7 @@ const updateAvailability = async (mentorId, availabilityStatus) => {
       message: complete
         ? "Faculty marked as UNAVAILABLE. Pending reassignment completed."
         : "Faculty marked as UNAVAILABLE. Some requests need reassignment review.",
+
       data: {
         availabilityStatus: nextStatus,
         availabilityUpdatedAt: now,
@@ -503,6 +484,7 @@ const updateAvailability = async (mentorId, availabilityStatus) => {
       success: true,
       message:
         "Faculty marked as UNAVAILABLE, but pending reassignment requires retry or administrative review.",
+
       data: {
         availabilityStatus: nextStatus,
         availabilityUpdatedAt: now,

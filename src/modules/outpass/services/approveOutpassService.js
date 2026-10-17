@@ -11,7 +11,7 @@ const authRepository = require("../../auth/repositories/auth.repository");
 const { approvedEvent } = require("../utils/timelineHelper");
 const { OUTPASS_STATUS } = require("../constants/outpassStatus");
 
-const { createQRToken, getISTDay } = require("./qrService");
+const { createQRToken, getISTDay, getValidityWindow } = require("./qrService");
 
 const { resolveOutpassAuthority } = require("./outpassEscalationService");
 
@@ -52,7 +52,7 @@ const ROLE_HIERARCHY = Object.freeze({
 });
 
 // ============================================================
-// HELPERS
+// COMMON HELPERS
 // ============================================================
 
 const failure = (message) => ({
@@ -150,8 +150,9 @@ const getISTDateRange = (date) => {
 
 // ============================================================
 // PREVIOUS APPROVED OUTPASSES
+//
 // Includes historic records with missing IST day key.
-// An approved trip counts even after student returns.
+// Approved trips count even after RETURNED.
 // ============================================================
 
 const getPreviousApprovedTrips = async ({
@@ -225,7 +226,7 @@ const getPreviousApprovedTrips = async ({
 };
 
 // ============================================================
-// VERIFY PREVIOUS EXIT + ENTRY CYCLE
+// VERIFY PREVIOUS EXIT / ENTRY CYCLE
 // ============================================================
 
 const isTripCycleCompleted = (trip) => {
@@ -250,7 +251,7 @@ const isTripCycleCompleted = (trip) => {
 };
 
 // ============================================================
-// NEW: FORMAT OUTPASS DATE FOR STUDENT EMAIL
+// FORMAT DATE FOR STUDENT EMAIL
 // ============================================================
 
 const formatOutpassDate = (date) => {
@@ -269,11 +270,13 @@ const formatOutpassDate = (date) => {
 };
 
 // ============================================================
-// NEW: STUDENT APPROVAL EMAIL
-// Called only after successful database commit.
+// STUDENT APPROVAL EMAIL
+//
+// Called only AFTER database commit.
+// QR readiness is based on verified parent consent.
 // ============================================================
 
-const notifyStudentByEmail = async ({ outpass, approvedRole }) => {
+const notifyStudentByEmail = async ({ outpass, approvedRole, qrReady }) => {
   const student = await authRepository.findUserById(outpass.student);
 
   if (!student) {
@@ -353,10 +356,22 @@ const notifyStudentByEmail = async ({ outpass, approvedRole }) => {
           </p>
         `;
       }
-    } catch (error) {
+    } catch {
       console.warn("AMIOUT dashboard email URL is invalid.");
     }
   }
+
+  const qrHeading = qrReady
+    ? "Your Digital QR Pass Is Ready"
+    : "Waiting for Parent Consent";
+
+  const qrDescription = qrReady
+    ? "Log in to your AMIOUT Student Dashboard to view your QR code."
+    : "Faculty approval is recorded. Your QR will be issued only after verified parent consent.";
+
+  const nextAction = qrReady
+    ? "Present your QR at the Security Gate for EXIT verification."
+    : "Please wait for valid parent consent and QR issuance before attempting to leave campus.";
 
   const html = `
     <div style="
@@ -366,6 +381,7 @@ const notifyStudentByEmail = async ({ outpass, approvedRole }) => {
       padding:24px;
       color:#172033;
     ">
+
       <div style="
         background:#0b2340;
         padding:22px;
@@ -378,6 +394,7 @@ const notifyStudentByEmail = async ({ outpass, approvedRole }) => {
         ">
           AMIOUT
         </h1>
+
         <p style="
           color:#b7e4d5;
           margin:8px 0 0;
@@ -391,19 +408,19 @@ const notifyStudentByEmail = async ({ outpass, approvedRole }) => {
         border:1px solid #e4e9ed;
         border-radius:0 0 12px 12px;
       ">
+
         <h2 style="
           color:#087f5b;
           margin-top:0;
         ">
-          Outpass Approved
+          Faculty Approval Recorded
         </h2>
 
         <p>Dear ${studentName},</p>
 
         <p>
-          Your outpass request has been
-          approved by the authorized
-          university faculty.
+          Your outpass request has been approved
+          by the authorized university faculty.
         </p>
 
         <div style="
@@ -414,12 +431,11 @@ const notifyStudentByEmail = async ({ outpass, approvedRole }) => {
           margin:20px 0;
         ">
           <strong style="color:#087f5b;">
-            Your Digital QR Pass Is Ready
+            ${qrHeading}
           </strong>
 
           <p style="margin-bottom:0;">
-            Log in to your AMIOUT Student
-            Dashboard to view your QR code.
+            ${qrDescription}
           </p>
         </div>
 
@@ -482,32 +498,28 @@ const notifyStudentByEmail = async ({ outpass, approvedRole }) => {
 
         ${dashboardSection}
 
-        <p>
-          Please present your QR code to
-          the Security Guard at the university
-          gate for EXIT verification.
-        </p>
+        <p>${nextAction}</p>
 
         <p style="
           font-size:13px;
           color:#687787;
         ">
-          Your QR code is available only
-          within the permitted verification
-          time window.
+          Your QR code is available only within
+          the permitted verification time window.
         </p>
 
         <p>
           Regards,<br />
           <strong>AMIOUT Team</strong>
         </p>
+
       </div>
     </div>
   `;
 
   await sendEmail({
     to: studentEmail,
-    subject: `AMIOUT - Outpass Approved (${outpass.outpassId})`,
+    subject: `AMIOUT - Faculty Approval (${outpass.outpassId})`,
     html,
   });
 
@@ -520,7 +532,13 @@ const notifyStudentByEmail = async ({ outpass, approvedRole }) => {
 
 // ============================================================
 // MAIN APPROVAL SERVICE
-// MENTOR -> BACKUP -> COORDINATOR -> HOD -> HOI
+//
+// MENTOR -> COORDINATOR -> HOD -> HOI
+//
+// RULE:
+// Parent PENDING  -> Faculty approval allowed, NO QR
+// Parent APPROVED -> QR only if consent verified
+// Parent REJECTED -> Faculty approval blocked
 // ============================================================
 
 const approveOutpass = async (facultyId, outpassId, remark = "") => {
@@ -548,7 +566,7 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
 
   try {
     await session.withTransaction(async () => {
-      // Reset values if transaction is retried.
+      // Transaction retry safety.
       approvedId = null;
       errorMessage = null;
 
@@ -588,14 +606,10 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
       }
 
       // ======================================================
-      // STEP 4: PARENT APPROVAL VERIFICATION
-      // ======================================================
-
-      // ======================================================
       // STEP 4: PARENT DECISION
-      // Parent confirmation is optional.
-      // Institutional faculty approval is mandatory.
-      // Never falsely mark a parent as APPROVED.
+      //
+      // Parent PENDING is allowed for faculty approval.
+      // Parent REJECTED is NEVER overridden.
       // ======================================================
 
       const parentStatus = outpass.parentDecision?.status || "PENDING";
@@ -605,26 +619,27 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
         return;
       }
 
-      // Explicit parent rejection must be acknowledged.
-      // The rejection itself is never overwritten.
-      if (parentStatus === "REJECTED" && cleanRemark.length < 10) {
+      if (parentStatus === "REJECTED") {
         errorMessage =
-          "Parent has rejected this request. " +
-          "A clear faculty acknowledgement remark " +
-          "of at least 10 characters is required.";
+          "Parent has rejected this outpass. " + "Approval is blocked.";
         return;
       }
 
+      // Status APPROVED alone is not sufficient.
+      // Verify actual SMS or audited phone consent.
+
+      const parentConsentVerified = outpass.hasParentConsent();
+
       // ======================================================
-      // STEP 5: FACULTY ACCOUNT
+      // STEP 5: FACULTY ACCOUNT AUTHORIZATION
       // ======================================================
 
       const faculty = await Mentor.findById(facultyId).session(session);
 
       if (!isFacultyAuthorized(faculty, outpass.assignedRole, now)) {
         errorMessage =
-          "Faculty is unavailable or does not have " +
-          "an active authorized role.";
+          "Faculty is unavailable or does not " +
+          "have an active authorized role.";
         return;
       }
 
@@ -644,7 +659,7 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
       }
 
       // ======================================================
-      // STEP 7: VERIFY ACADEMIC SNAPSHOT
+      // STEP 7: ACADEMIC DETAILS
       // ======================================================
 
       if (
@@ -663,12 +678,12 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
         (outpass.academicProgram &&
           !sameId(studentMaster.program, outpass.academicProgram))
       ) {
-        errorMessage = "Student institute or program mapping mismatch.";
+        errorMessage = "Student institute or program " + "mapping mismatch.";
         return;
       }
 
       // ======================================================
-      // STEP 8: RESOLVE CURRENT AUTHORITY
+      // STEP 8: CURRENT AUTHORITY
       // ======================================================
 
       const authorityResult = await resolveOutpassAuthority({
@@ -683,19 +698,19 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
       }
 
       // ======================================================
-      // STEP 9: VERIFY AUTHORIZED FACULTY
+      // STEP 9: MATCH AUTHORIZED FACULTY
       // ======================================================
 
       if (!sameId(authorityResult.faculty?._id, facultyId)) {
         errorMessage =
-          "This faculty is no longer the current " +
-          "authorized authority. Request " +
-          "reassignment is required.";
+          "This faculty is no longer the " +
+          "current authorized authority. " +
+          "Request reassignment is required.";
         return;
       }
 
       // ======================================================
-      // STEP 10: VERIFY ROLE LEVEL
+      // STEP 10: CHECK ROLE LEVEL
       // ======================================================
 
       if (authorityResult.assignedRole !== outpass.assignedRole) {
@@ -706,7 +721,7 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
       }
 
       // ======================================================
-      // STEP 11: DAILY IST OUTPASS LIMIT
+      // STEP 11: DAILY OUTPASS LIMIT (IST)
       // ======================================================
 
       const dateRange = getISTDateRange(outpass.outDate);
@@ -736,31 +751,53 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
 
       if (tripNumber === 2 && !previousApproved.every(isTripCycleCompleted)) {
         errorMessage =
-          "Complete EXIT and ENTRY of the " +
-          "first trip before second approval.";
+          "Complete EXIT and ENTRY of " +
+          "the first trip before second approval.";
         return;
       }
 
       // ======================================================
-      // STEP 12: GENERATE SECURE QR TOKEN
+      // STEP 12: CONDITIONAL QR GENERATION
+      //
+      // Parent PENDING:
+      //   Record faculty approval only.
+      //
+      // Valid parent consent:
+      //   Generate signed QR.
+      //
+      // This prevents premature QR issuance.
       // ======================================================
 
-      let qr;
+      let validityWindow;
 
       try {
-        qr = createQRToken(outpass, now);
+        validityWindow = getValidityWindow(outpass.outDate);
       } catch (error) {
-        errorMessage = error.message || "Unable to generate QR token.";
+        errorMessage = error.message || "Invalid outpass QR validity window.";
         return;
       }
 
-      // ======================================================
-      // STEP 13: PARENT CONSENT CONDITIONAL FILTER
-      // ======================================================
+      if (now >= validityWindow.expiresAt) {
+        errorMessage = "The outpass QR validity " + "window has expired.";
+        return;
+      }
+
+      let qr = null;
+
+      if (parentConsentVerified) {
+        try {
+          qr = createQRToken(outpass, now);
+        } catch (error) {
+          errorMessage = error.message || "Unable to generate QR token.";
+          return;
+        }
+      }
 
       // ======================================================
       // STEP 13: ATOMIC FILTER
-      // Preserve the actual parent decision.
+      //
+      // Parent consent state must not change
+      // silently during faculty approval.
       // ======================================================
 
       const filter = {
@@ -774,25 +811,48 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
         dailyTripNumber: null,
       };
 
-      // If parent responds while faculty is approving,
-      // reject this update and require a fresh review.
       if (parentStatus === "PENDING") {
         filter["parentDecision.decidedAt"] = null;
       } else {
         filter["parentDecision.decidedAt"] = outpass.parentDecision.decidedAt;
+
         filter["parentDecision.method"] = outpass.parentDecision.method;
+
+        if (outpass.parentDecision.method === "SMS_LINK") {
+          filter["parentDecision.tokenUsedAt"] =
+            outpass.parentDecision.tokenUsedAt;
+        } else if (outpass.parentDecision.method === "PHONE_CALL") {
+          filter["parentDecision.callVerifiedAt"] =
+            outpass.parentDecision.callVerifiedAt;
+
+          filter["parentDecision.callOutcome"] =
+            outpass.parentDecision.callOutcome;
+        }
       }
+
+      // ======================================================
+      // PARENT ACKNOWLEDGEMENT AUDIT
+      //
+      // This is an audit record,
+      // NOT parent approval.
+      // ======================================================
 
       const parentAcknowledgement = {
         parentStatusAtApproval: parentStatus,
+
         acknowledgedBy: facultyId,
+
         acknowledgedRole: outpass.assignedRole,
-        remark: parentStatus === "REJECTED" ? cleanRemark : "",
+
+        remark: parentConsentVerified
+          ? "Parent consent verified before faculty decision."
+          : "Faculty decision recorded; valid parent consent still required for QR.",
+
         acknowledgedAt: now,
       };
 
       // ======================================================
-      // STEP 14: ATOMIC OUTPASS APPROVAL
+      // STEP 14: ATOMIC FACULTY APPROVAL
       // ======================================================
 
       const approved = await Outpass.findOneAndUpdate(
@@ -815,15 +875,18 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
 
             dailyTripNumber: tripNumber,
 
-            qrGenerated: true,
+            // QR generated only with
+            // real verified parent consent.
 
-            qrGeneratedAt: qr.qrGeneratedAt,
+            qrGenerated: Boolean(qr),
 
-            qrToken: qr.token,
+            qrGeneratedAt: qr?.qrGeneratedAt || null,
 
-            qrValidFrom: qr.qrValidFrom,
+            qrToken: qr?.token || null,
 
-            qrExpiresAt: qr.qrExpiresAt,
+            qrValidFrom: qr?.qrValidFrom || null,
+
+            qrExpiresAt: qr?.qrExpiresAt || null,
 
             qrRevokedAt: null,
           },
@@ -877,6 +940,12 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
     return failure("Approved outpass could not be retrieved.");
   }
 
+  // Parent consent must actually be verified
+  // before calling QR ready.
+
+  const qrReady =
+    updatedOutpass.qrGenerated === true && updatedOutpass.hasParentConsent();
+
   // ============================================================
   // STEP 16: STUDENT WEBSITE NOTIFICATION
   // ============================================================
@@ -885,8 +954,9 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
     await sendNotification({
       title: "Outpass Approved",
 
-      message:
-        "Your outpass has been approved. " + "Your digital QR pass is ready.",
+      message: qrReady
+        ? "Faculty and parent approvals are complete. Your digital QR pass is ready."
+        : "Faculty approval recorded. Your QR will be issued after valid parent consent.",
 
       type: NOTIFICATION_TYPES.OUTPASS_APPROVED,
 
@@ -903,7 +973,7 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
   }
 
   // ============================================================
-  // STEP 17: NEW - STUDENT EMAIL AFTER FACULTY APPROVAL
+  // STEP 17: STUDENT EMAIL
   // ============================================================
 
   try {
@@ -911,9 +981,12 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
       outpass: updatedOutpass,
 
       approvedRole: updatedOutpass.approvedAuthorityRole,
+
+      qrReady,
     });
   } catch (error) {
     // Email failure does not undo faculty approval.
+
     console.error(
       "Student Approval Email Error:",
       updatedOutpass.outpassId,
@@ -926,7 +999,7 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
   // ============================================================
 
   try {
-    if (updatedOutpass.parentEmail?.trim()) {
+    if (qrReady && updatedOutpass.parentEmail?.trim()) {
       const html = outpassApprovedTemplate({
         parentName: updatedOutpass.parentName,
 
@@ -962,11 +1035,17 @@ const approveOutpass = async (facultyId, outpassId, remark = "") => {
   return {
     success: true,
 
-    message: "Outpass approved successfully. " + "Digital QR pass is ready.",
+    message: qrReady
+      ? "Faculty approval recorded. Digital QR pass is ready."
+      : "Faculty approval recorded. Awaiting verified parent consent before QR issuance.",
 
     data: updatedOutpass,
   };
 };
+
+// ============================================================
+// EXPORT
+// ============================================================
 
 module.exports = Object.freeze({
   approveOutpass,

@@ -11,9 +11,12 @@ const QR_VERSION = 1;
 
 const IST_TIMEZONE = "Asia/Kolkata";
 
-// AMIOUT Security Gate Verification Window
+// AMIOUT QR Validity Window
+// Start: 09:15 AM IST
+// End:   06:00 PM IST (exclusive)
+
 const QR_START_TIME = "09:15:00";
-const QR_END_TIME = "17:15:00";
+const QR_END_TIME = "18:00:00";
 
 // ============================================================
 // SECRET KEY
@@ -69,11 +72,10 @@ const getISTDay = (date) => {
 // QR VALIDITY WINDOW
 //
 // Valid From : 09:15 AM IST
-// Expires At : 05:15 PM IST
+// Expires At : 06:00 PM IST
 //
-// Important:
-// The end time is exclusive. QR becomes invalid
-// at exactly 05:15 PM.
+// End time is exclusive.
+// QR becomes invalid at exactly 06:00 PM.
 // ============================================================
 
 const getValidityWindow = (outDate) => {
@@ -100,10 +102,10 @@ const getValidityWindow = (outDate) => {
 // ============================================================
 // CREATE SECURE QR TOKEN
 //
-// Does NOT update database.
+// Does NOT update the database.
 // Caller must save token and validity timestamps.
 //
-// Existing version 1 token structure is preserved.
+// Existing version 1 token format is preserved.
 // ============================================================
 
 const createQRToken = (outpass, now = new Date()) => {
@@ -119,7 +121,6 @@ const createQRToken = (outpass, now = new Date()) => {
 
   const { validFrom, expiresAt } = getValidityWindow(outpass.outDate);
 
-  // Do not create a QR after the expiry.
   if (currentTime >= expiresAt) {
     throw new Error("The QR validity window has expired.");
   }
@@ -278,9 +279,9 @@ const verifyQRSignature = (token, now = new Date()) => {
 };
 
 // ============================================================
-// CHECK CURRENT QR GATE TIME WINDOW
+// CHECK QR VALIDITY WINDOW
 //
-// Use in Security EXIT / ENTRY verification.
+// Used by Security EXIT / ENTRY verification.
 // ============================================================
 
 const isWithinQRValidityWindow = (outDate, now = new Date()) => {

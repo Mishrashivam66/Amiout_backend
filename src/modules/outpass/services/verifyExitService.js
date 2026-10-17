@@ -57,7 +57,7 @@ const isWithinGateWindow = (date = new Date()) => {
 
   const minutes = get("hour") * 60 + get("minute");
 
-  return minutes >= 555 && minutes < 1035;
+  return minutes >= 555 && minutes < 1090;
 };
 
 // ============================================================
@@ -77,58 +77,15 @@ const validateParentDecision = (outpass) => {
     return fail("Invalid parent decision status.");
   }
 
-  if (parentStatus !== "REJECTED") {
-    return {
-      success: true,
-      status: parentStatus,
-    };
-  }
-
-  const decision = outpass.parentDecision;
-  const acknowledgement = outpass.parentConsentAcknowledgement;
-
-  if (
-    !decision?.decidedAt ||
-    !acknowledgement ||
-    acknowledgement.parentStatusAtApproval !== "REJECTED" ||
-    !acknowledgement.acknowledgedBy ||
-    !acknowledgement.acknowledgedRole ||
-    !acknowledgement.acknowledgedAt ||
-    String(acknowledgement.remark || "").trim().length < 10
-  ) {
+  if (parentStatus === "REJECTED") {
     return fail(
-      "Parent rejection has not been formally " +
-        "acknowledged by an authorized faculty.",
+      "Parent has explicitly rejected this outpass. EXIT is blocked.",
     );
-  }
-
-  if (
-    !sameId(acknowledgement.acknowledgedBy, outpass.approvedByFaculty) ||
-    acknowledgement.acknowledgedRole !== outpass.approvedAuthorityRole
-  ) {
-    return fail(
-      "Parent rejection acknowledgement does not " +
-        "match the approving faculty.",
-    );
-  }
-
-  const parentDecisionTime = new Date(decision.decidedAt).getTime();
-
-  const acknowledgementTime = new Date(
-    acknowledgement.acknowledgedAt,
-  ).getTime();
-
-  if (
-    !Number.isFinite(parentDecisionTime) ||
-    !Number.isFinite(acknowledgementTime) ||
-    acknowledgementTime < parentDecisionTime
-  ) {
-    return fail("Parent rejection requires a new faculty review.");
   }
 
   return {
     success: true,
-    status: "REJECTED",
+    status: parentStatus,
   };
 };
 

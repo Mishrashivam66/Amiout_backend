@@ -7,8 +7,39 @@ const Outpass = require("../models/Outpass");
 
 const { verifyQRSignature } = require("../services/qrService");
 
+// ============================================================
+// AUTHORIZED UNIVERSITY APPROVAL ROLES
+// ============================================================
+
+const AUTHORIZED_ROLES = new Set([
+  "MENTOR",
+  "BACKUP_MENTOR",
+  "COORDINATOR",
+  "HOD",
+  "HOI",
+]);
+
+// ============================================================
+// GET STUDENT DIGITAL OUTPASS QR
+//
+// University faculty approval is mandatory.
+// Parent SMS approval is optional while PENDING.
+// Explicit parent rejection is never overridden.
+//
+// SECURITY:
+// - Student ownership required
+// - University approval required
+// - Issued signed QR required
+// - Time window required
+// - Signature verification required
+// ============================================================
+
 const getStudentQR = asyncHandler(async (req, res) => {
   res.set("Cache-Control", "no-store");
+
+  // ==========================================================
+  // STEP 1: AUTHENTICATED STUDENT
+  // ==========================================================
 
   const studentId = req.user?._id || req.user?.id;
   const { outpassId } = req.params;
@@ -20,11 +51,24 @@ const getStudentQR = asyncHandler(async (req, res) => {
     });
   }
 
+  if (!outpassId || typeof outpassId !== "string") {
+    return res.status(400).json({
+      success: false,
+      message: "Valid outpass ID is required.",
+    });
+  }
+
+  // ==========================================================
+  // STEP 2: IDENTIFY OUTPASS
+  // ==========================================================
+
   const lookup = mongoose.isValidObjectId(outpassId)
     ? {
         $or: [{ _id: outpassId }, { outpassId }],
       }
-    : { outpassId };
+    : {
+        outpassId,
+      };
 
   const outpass = await Outpass.findOne({
     ...lookup,
@@ -39,140 +83,154 @@ const getStudentQR = asyncHandler(async (req, res) => {
     });
   }
 
-  // ============================================================
-  // CHECK OUTPASS STATUS
-  // ============================================================
+  // ==========================================================
+  // STEP 3: OUTPASS STATUS CHECK
+  // ==========================================================
 
-  if (!["APPROVED", "EXITED"].includes(outpass.status)) {
+  const allowedStatuses = ["APPROVED", "EXITED"];
+
+  if (!allowedStatuses.includes(outpass.status)) {
     return res.status(403).json({
       success: false,
       message: "QR is not available for this outpass status.",
     });
   }
 
-  // ============================================================
-  // TEMPORARY QR DEBUGGING
-  // Remove this console.log after identifying the problem.
-  // ============================================================
+  // ==========================================================
+  // STEP 4: PARENT DECISION
+  //
+  // Parent PENDING:
+  //   QR allowed after authorized faculty approval.
+  //
+  // Parent APPROVED:
+  //   QR allowed after authorized faculty approval.
+  //
+  // Parent REJECTED:
+  //   QR blocked.
+  //
+  // IMPORTANT:
+  // Never modify parent status automatically.
+  // ==========================================================
 
-  console.log("[AMIOUT QR APPROVAL CHECK]", {
-    outpassStatus: outpass.status,
+  const parentStatus = outpass.parentDecision?.status || "PENDING";
 
-    parentStatus: outpass.parentDecision?.status,
-    parentMethod: outpass.parentDecision?.method,
-
-    smsDecidedAt: Boolean(outpass.parentDecision?.decidedAt),
-
-    smsTokenUsedAt: Boolean(outpass.parentDecision?.tokenUsedAt),
-
-    callOutcome: outpass.parentDecision?.callOutcome,
-
-    phoneVerifiedByFaculty: Boolean(outpass.parentDecision?.verifiedByFaculty),
-
-    phoneVerifiedByRole: Boolean(outpass.parentDecision?.verifiedByRole),
-
-    phoneVerifiedAt: Boolean(outpass.parentDecision?.callVerifiedAt),
-
-    hasParentConsent:
-      typeof outpass.hasParentConsent === "function"
-        ? outpass.hasParentConsent()
-        : false,
-
-    facultyApprovedAt: Boolean(outpass.approvedAt),
-
-    facultyApprovedBy: Boolean(outpass.approvedByFaculty),
-
-    qrGenerated: outpass.qrGenerated,
-
-    qrTokenExists: Boolean(outpass.qrToken),
-
-    qrValidFromExists: Boolean(outpass.qrValidFrom),
-
-    qrExpiresAtExists: Boolean(outpass.qrExpiresAt),
-  });
-
-  // ============================================================
-  // VERIFY PARENT CONSENT
-  // ============================================================
-
-  if (
-    typeof outpass.hasParentConsent !== "function" ||
-    !outpass.hasParentConsent()
-  ) {
+  if (!["PENDING", "APPROVED", "REJECTED"].includes(parentStatus)) {
     return res.status(403).json({
       success: false,
-      message: "Parent consent verification is pending or incomplete.",
+      message: "Invalid parent decision status.",
     });
   }
 
-  // ============================================================
-  // VERIFY UNIVERSITY APPROVAL
-  // ============================================================
+  if (parentStatus === "REJECTED") {
+    return res.status(403).json({
+      success: false,
+      message: "Parent has rejected this outpass. QR access is blocked.",
+    });
+  }
+
+  // Parent PENDING does not independently block the QR.
+  // University approval checks follow.
+
+  // ==========================================================
+  // STEP 5: VERIFY UNIVERSITY FACULTY APPROVAL
+  // ==========================================================
 
   if (!outpass.approvedByFaculty) {
     return res.status(403).json({
       success: false,
-      message:
-        "University approval record is incomplete: approving faculty missing.",
+      message: "University approval is incomplete: approving faculty missing.",
     });
   }
 
   if (!outpass.approvedAt) {
     return res.status(403).json({
       success: false,
-      message:
-        "University approval record is incomplete: approval timestamp missing.",
+      message: "University approval is incomplete: approval timestamp missing.",
     });
   }
 
-  // ============================================================
-  // CHECK QR GENERATION
-  // ============================================================
+  const approvedRole = String(outpass.approvedAuthorityRole || "")
+    .trim()
+    .toUpperCase();
+
+  if (!AUTHORIZED_ROLES.has(approvedRole)) {
+    return res.status(403).json({
+      success: false,
+      message: "University approval role is missing or unauthorized.",
+    });
+  }
+
+  // ==========================================================
+  // STEP 6: VERIFY QR WAS GENERATED
+  // ==========================================================
 
   if (
     outpass.qrGenerated !== true ||
     !outpass.qrToken ||
     !outpass.qrValidFrom ||
-    !outpass.qrExpiresAt ||
-    outpass.qrRevokedAt
+    !outpass.qrExpiresAt
   ) {
     return res.status(403).json({
       success: false,
-      message: "No valid QR has been issued.",
+      message: "Digital QR has not been issued for this outpass.",
     });
   }
 
+  // ==========================================================
+  // STEP 7: CHECK QR REVOCATION
+  // ==========================================================
+
+  if (outpass.qrRevokedAt) {
+    return res.status(403).json({
+      success: false,
+      message: "This QR has been revoked.",
+    });
+  }
+
+  // ==========================================================
+  // STEP 8: VERIFY QR TIME WINDOW
+  // ==========================================================
+
   const now = new Date();
 
-  // ============================================================
-  // VERIFY QR TIME WINDOW
-  // ============================================================
+  const validFrom = new Date(outpass.qrValidFrom);
+  const expiresAt = new Date(outpass.qrExpiresAt);
 
-  if (now < outpass.qrValidFrom) {
+  if (
+    Number.isNaN(validFrom.getTime()) ||
+    Number.isNaN(expiresAt.getTime()) ||
+    expiresAt <= validFrom
+  ) {
+    return res.status(403).json({
+      success: false,
+      message: "QR validity information is invalid.",
+    });
+  }
+
+  if (now < validFrom) {
     return res.status(403).json({
       success: false,
       message: "QR is not yet valid.",
     });
   }
 
-  if (now >= outpass.qrExpiresAt) {
+  if (now >= expiresAt) {
     return res.status(403).json({
       success: false,
       message: "QR has expired.",
     });
   }
 
-  // ============================================================
-  // VERIFY QR SIGNATURE
-  // ============================================================
+  // ==========================================================
+  // STEP 9: VERIFY QR DIGITAL SIGNATURE
+  // ==========================================================
 
   const verification = verifyQRSignature(outpass.qrToken, now);
 
   if (
     !verification.valid ||
     verification.payload?.outpassId !== String(outpass._id) ||
-    verification.payload?.expiresAt !==
-      Math.floor(outpass.qrExpiresAt.getTime() / 1000)
+    verification.payload?.expiresAt !== Math.floor(expiresAt.getTime() / 1000)
   ) {
     return res.status(403).json({
       success: false,
@@ -180,22 +238,38 @@ const getStudentQR = asyncHandler(async (req, res) => {
     });
   }
 
-  // ============================================================
-  // RETURN SECURE QR
-  // ============================================================
+  // ==========================================================
+  // STEP 10: SUCCESS RESPONSE
+  // ==========================================================
 
   return res.status(200).json({
     success: true,
+
     message: "Digital outpass QR retrieved successfully.",
+
     data: {
       outpassId: outpass.outpassId,
+
       qrToken: outpass.qrToken,
+
       validFrom: outpass.qrValidFrom,
+
       expiresAt: outpass.qrExpiresAt,
+
       status: outpass.status,
+
+      approvedAuthorityRole: approvedRole,
+
+      // Parent status is reported accurately.
+      // PENDING is never mislabeled as APPROVED.
+      parentStatus,
     },
   });
 });
+
+// ============================================================
+// EXPORT
+// ============================================================
 
 module.exports = Object.freeze({
   getStudentQR,

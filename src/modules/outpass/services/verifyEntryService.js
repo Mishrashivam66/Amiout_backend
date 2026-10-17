@@ -17,6 +17,18 @@ const { createActivity } = require("../../student/services/activityService");
 const { buildSecurityResponse } = require("../utils/securityResponse");
 
 // ============================================================
+// CONFIGURATION
+// ============================================================
+
+const AUTHORIZED_APPROVAL_ROLES = new Set([
+  "MENTOR",
+  "BACKUP_MENTOR",
+  "COORDINATOR",
+  "HOD",
+  "HOI",
+]);
+
+// ============================================================
 // HELPERS
 // ============================================================
 
@@ -37,6 +49,13 @@ const tokensMatch = (a, b) => {
   return crypto.timingSafeEqual(first, second);
 };
 
+// ============================================================
+// OFFICIAL SECURITY GATE WINDOW
+//
+// 09:15 AM - 06:00 PM IST
+// 06:00 PM is exclusive.
+// ============================================================
+
 const isWithinGateWindow = (date = new Date()) => {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Kolkata",
@@ -50,11 +69,11 @@ const isWithinGateWindow = (date = new Date()) => {
 
   const minutes = get("hour") * 60 + get("minute");
 
-  return minutes >= 555 && minutes < 1035;
+  return minutes >= 555 && minutes < 1080;
 };
 
 // ============================================================
-// POPULATE APPROVAL DETAILS
+// POPULATE SECURITY DETAILS
 // ============================================================
 
 const populateSecurityDetails = async (outpass) => {
@@ -86,10 +105,25 @@ const populateSecurityDetails = async (outpass) => {
 
 // ============================================================
 // VERIFY STUDENT ENTRY
+//
+// RULES:
+// 1. QR must be authentic and currently issued.
+// 2. EXIT must have been verified earlier.
+// 3. ENTRY must not already be verified.
+// 4. Original university approval must exist.
+// 5. Parent PENDING does not block ENTRY.
+// 6. Entry window ends at 06:00 PM IST.
+// 7. Atomic update prevents duplicate ENTRY.
+//
+// IMPORTANT:
+// Returning a student must not depend on obtaining
+// a fresh parent decision after EXIT.
 // ============================================================
 
 const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
+  // ==========================================================
   // STEP 1: VALIDATE INPUT
+  // ==========================================================
 
   if (
     !mongoose.isValidObjectId(outpassId) ||
@@ -104,16 +138,20 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
 
   const now = new Date();
 
-  // STEP 2: GATE TIME WINDOW
+  // ==========================================================
+  // STEP 2: CHECK SECURITY GATE WINDOW
+  // ==========================================================
 
   if (!isWithinGateWindow(now)) {
     return fail(
       "QR verification is permitted only " +
-        "between 09:15 AM and 05:15 PM IST.",
+        "between 09:15 AM and 06:00 PM IST.",
     );
   }
 
-  // STEP 3: QR SIGNATURE
+  // ==========================================================
+  // STEP 3: VERIFY SIGNED QR
+  // ==========================================================
 
   const verification = verifyQRSignature(qrToken, now);
 
@@ -121,11 +159,13 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     return fail(verification.message || "Invalid QR signature.");
   }
 
-  if (verification.payload.outpassId !== String(outpassId)) {
+  if (verification.payload?.outpassId !== String(outpassId)) {
     return fail("QR token does not belong to this outpass.");
   }
 
+  // ==========================================================
   // STEP 4: LOAD OUTPASS
+  // ==========================================================
 
   const outpass = await Outpass.findOne({
     _id: outpassId,
@@ -136,7 +176,9 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     return fail("Outpass not found.");
   }
 
+  // ==========================================================
   // STEP 5: REQUIRE VERIFIED EXIT
+  // ==========================================================
 
   if (outpass.status !== OUTPASS_STATUS.EXITED) {
     return fail("Student must have a verified EXIT before ENTRY.");
@@ -146,13 +188,36 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     return fail("Verified EXIT record is missing.");
   }
 
+  // ==========================================================
   // STEP 6: PREVENT DUPLICATE ENTRY
+  // ==========================================================
 
   if (outpass.entryVerified === true || outpass.entryVerifiedAt) {
     return fail("ENTRY is already verified.");
   }
 
-  // STEP 7: STORED QR TOKEN
+  // ==========================================================
+  // STEP 7: UNIVERSITY APPROVAL RECORD
+  //
+  // Parent SMS consent is not required for returning.
+  // The recorded university approval must still exist.
+  // ==========================================================
+
+  if (!outpass.approvedByFaculty || !outpass.approvedAt) {
+    return fail("Original university approval record is incomplete.");
+  }
+
+  const approvedRole = String(outpass.approvedAuthorityRole || "")
+    .trim()
+    .toUpperCase();
+
+  if (!AUTHORIZED_APPROVAL_ROLES.has(approvedRole)) {
+    return fail("Original university approval role is invalid.");
+  }
+
+  // ==========================================================
+  // STEP 8: VERIFY STORED QR TOKEN
+  // ==========================================================
 
   if (
     outpass.qrGenerated !== true ||
@@ -166,7 +231,9 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     return fail("QR pass has been revoked.");
   }
 
-  // STEP 8: OFFICIAL DATE AND GATE WINDOW
+  // ==========================================================
+  // STEP 9: CHECK QR DATE AND VALIDITY WINDOW
+  // ==========================================================
 
   if (!isWithinQRValidityWindow(outpass.outDate, now)) {
     return fail(
@@ -177,27 +244,51 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
 
   const { validFrom, expiresAt } = getValidityWindow(outpass.outDate);
 
-  // Both database expiry and current policy apply.
-  // An old 6 PM QR cannot extend the 5:15 PM cutoff.
+  if (!outpass.qrValidFrom || !outpass.qrExpiresAt) {
+    return fail("Stored QR validity information is missing.");
+  }
+
+  const savedValidFrom = new Date(outpass.qrValidFrom);
+
+  const savedExpiresAt = new Date(outpass.qrExpiresAt);
 
   if (
-    !outpass.qrValidFrom ||
-    !outpass.qrExpiresAt ||
-    now < outpass.qrValidFrom ||
-    now >= outpass.qrExpiresAt ||
+    Number.isNaN(savedValidFrom.getTime()) ||
+    Number.isNaN(savedExpiresAt.getTime())
+  ) {
+    return fail("Stored QR validity information is invalid.");
+  }
+
+  if (
+    now < savedValidFrom ||
+    now >= savedExpiresAt ||
     now < validFrom ||
     now >= expiresAt
   ) {
     return fail("QR pass is outside its permitted time window.");
   }
 
-  // STEP 9: VALIDATE ENTRY AFTER EXIT
+  // Confirm signed token expiry matches the database.
+  if (
+    verification.payload?.expiresAt !==
+    Math.floor(savedExpiresAt.getTime() / 1000)
+  ) {
+    return fail("QR token expiry does not match the issued pass.");
+  }
 
-  if (now <= new Date(outpass.exitVerifiedAt)) {
+  // ==========================================================
+  // STEP 10: ENTRY MUST BE AFTER EXIT
+  // ==========================================================
+
+  const exitTime = new Date(outpass.exitVerifiedAt);
+
+  if (Number.isNaN(exitTime.getTime()) || now <= exitTime) {
     return fail("ENTRY time must be later than EXIT time.");
   }
 
-  // STEP 10: RESOLVE RETURNED STATUS
+  // ==========================================================
+  // STEP 11: RETURNED STATUS
+  // ==========================================================
 
   const returnedStatus = OUTPASS_STATUS.RETURNED || OUTPASS_STATUS.COMPLETED;
 
@@ -205,7 +296,9 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     return fail("RETURNED or COMPLETED status is not configured.");
   }
 
-  // STEP 11: FINAL VERIFICATION TIME
+  // ==========================================================
+  // STEP 12: FINAL VERIFICATION TIME
+  // ==========================================================
 
   const verificationTime = new Date();
 
@@ -216,11 +309,22 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     return fail("Security gate verification window has closed.");
   }
 
-  if (verificationTime <= new Date(outpass.exitVerifiedAt)) {
-    return fail("ENTRY time must be later than EXIT time.");
+  if (verificationTime <= exitTime || verificationTime >= savedExpiresAt) {
+    return fail("ENTRY time is invalid or the QR has expired.");
   }
 
-  // STEP 12: ATOMIC ENTRY UPDATE
+  // ==========================================================
+  // STEP 13: ATOMIC ENTRY UPDATE
+  //
+  // Prevent:
+  // - Duplicate ENTRY
+  // - Invalid/replaced QR
+  // - Revoked QR
+  // - Expired QR
+  // - University approval record changing
+  //
+  // Parent consent is not changed here.
+  // ==========================================================
 
   const updatedOutpass = await Outpass.findOneAndUpdate(
     {
@@ -238,8 +342,15 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
       entryVerified: false,
       entryVerifiedAt: null,
 
+      approvedByFaculty: outpass.approvedByFaculty,
+
+      approvedAt: outpass.approvedAt,
+
+      approvedAuthorityRole: outpass.approvedAuthorityRole,
+
       qrGenerated: true,
       qrToken,
+
       qrRevokedAt: null,
 
       qrValidFrom: {
@@ -270,11 +381,14 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
   if (!updatedOutpass) {
     return fail(
       "ENTRY verification failed. " +
-        "The pass may have changed or was already scanned.",
+        "The outpass may have changed " +
+        "or was already scanned.",
     );
   }
 
-  // STEP 13: STUDENT ACTIVITY
+  // ==========================================================
+  // STEP 14: STUDENT ACTIVITY
+  // ==========================================================
 
   try {
     await createActivity({
@@ -298,7 +412,9 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     console.error("ENTRY activity failed:", error.message);
   }
 
-  // STEP 14: RESPONSE DETAILS
+  // ==========================================================
+  // STEP 15: SECURITY RESPONSE
+  // ==========================================================
 
   await populateSecurityDetails(updatedOutpass);
 
@@ -310,6 +426,10 @@ const verifyEntry = async (outpassId, qrToken, securityGuardId) => {
     data: buildSecurityResponse(updatedOutpass),
   };
 };
+
+// ============================================================
+// EXPORT
+// ============================================================
 
 module.exports = Object.freeze({
   verifyEntry,

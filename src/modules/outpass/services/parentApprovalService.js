@@ -304,6 +304,28 @@ const reviewOutpass = async (token) => {
     .lean();
 
   if (!outpass) {
+    const record = await Outpass.findOne({
+      "parentDecision.tokenHash": tokenHash,
+    })
+      .select(
+        "outpassId status isDeleted " +
+          "parentDecision.status " +
+          "parentDecision.tokenExpiresAt " +
+          "parentDecision.tokenUsedAt",
+      )
+      .lean();
+
+    console.log("[AMIOUT PARENT LINK DEBUG]", {
+      tokenMatched: Boolean(record),
+      outpassStatus: record?.status || null,
+      parentStatus: record?.parentDecision?.status || null,
+      linkExpired: record?.parentDecision?.tokenExpiresAt
+        ? new Date(record.parentDecision.tokenExpiresAt).getTime() <= Date.now()
+        : null,
+      linkUsed: Boolean(record?.parentDecision?.tokenUsedAt),
+      isDeleted: record?.isDeleted === true,
+    });
+
     throw createError(
       "This approval link is invalid, expired or already used.",
       410,

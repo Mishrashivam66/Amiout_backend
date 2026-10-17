@@ -1,6 +1,7 @@
 "use strict";
 
 const express = require("express");
+
 const router = express.Router();
 
 const {
@@ -10,23 +11,27 @@ const {
 } = require("../../../middlewares/auth.middleware");
 
 const {
+  previewOutpassController,
   verifyExitController,
   verifyEntryController,
 } = require("../controllers/securityController");
 
-// All routes require authenticated Security Guard.
+// Require valid login.
 router.use(protect);
 
-// Temporary password must be changed first.
+// Require password setup.
 router.use(requirePasswordSetupComplete);
 
-// Only SECURITY role can access these routes.
+// Only Security Guard.
 router.use(requireRoles("SECURITY"));
 
-// QR-based EXIT verification.
+// SCAN QR -> VIEW DETAILS ONLY.
+router.post("/:id/preview", previewOutpassController);
+
+// CONFIRM EXIT.
 router.patch("/:id/verify-exit", verifyExitController);
 
-// QR-based ENTRY verification.
+// CONFIRM ENTRY.
 router.patch("/:id/verify-entry", verifyEntryController);
 
 module.exports = router;

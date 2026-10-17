@@ -4,6 +4,7 @@ const asyncHandler = require("express-async-handler");
 const mongoose = require("mongoose");
 
 const Outpass = require("../models/Outpass");
+
 const { verifyQRSignature } = require("../services/qrService");
 
 const getStudentQR = asyncHandler(async (req, res) => {
@@ -38,6 +39,10 @@ const getStudentQR = asyncHandler(async (req, res) => {
     });
   }
 
+  // ============================================================
+  // CHECK OUTPASS STATUS
+  // ============================================================
+
   if (!["APPROVED", "EXITED"].includes(outpass.status)) {
     return res.status(403).json({
       success: false,
@@ -45,19 +50,87 @@ const getStudentQR = asyncHandler(async (req, res) => {
     });
   }
 
+  // ============================================================
+  // TEMPORARY QR DEBUGGING
+  // Remove this console.log after identifying the problem.
+  // ============================================================
+
+  console.log("[AMIOUT QR APPROVAL CHECK]", {
+    outpassStatus: outpass.status,
+
+    parentStatus: outpass.parentDecision?.status,
+    parentMethod: outpass.parentDecision?.method,
+
+    smsDecidedAt: Boolean(outpass.parentDecision?.decidedAt),
+
+    smsTokenUsedAt: Boolean(outpass.parentDecision?.tokenUsedAt),
+
+    callOutcome: outpass.parentDecision?.callOutcome,
+
+    phoneVerifiedByFaculty: Boolean(outpass.parentDecision?.verifiedByFaculty),
+
+    phoneVerifiedByRole: Boolean(outpass.parentDecision?.verifiedByRole),
+
+    phoneVerifiedAt: Boolean(outpass.parentDecision?.callVerifiedAt),
+
+    hasParentConsent:
+      typeof outpass.hasParentConsent === "function"
+        ? outpass.hasParentConsent()
+        : false,
+
+    facultyApprovedAt: Boolean(outpass.approvedAt),
+
+    facultyApprovedBy: Boolean(outpass.approvedByFaculty),
+
+    qrGenerated: outpass.qrGenerated,
+
+    qrTokenExists: Boolean(outpass.qrToken),
+
+    qrValidFromExists: Boolean(outpass.qrValidFrom),
+
+    qrExpiresAtExists: Boolean(outpass.qrExpiresAt),
+  });
+
+  // ============================================================
+  // VERIFY PARENT CONSENT
+  // ============================================================
+
   if (
-    !outpass.hasParentConsent() ||
-    !outpass.approvedAt ||
-    !outpass.approvedByFaculty
+    typeof outpass.hasParentConsent !== "function" ||
+    !outpass.hasParentConsent()
   ) {
     return res.status(403).json({
       success: false,
-      message: "Required approvals are incomplete.",
+      message: "Parent consent verification is pending or incomplete.",
     });
   }
 
+  // ============================================================
+  // VERIFY UNIVERSITY APPROVAL
+  // ============================================================
+
+  if (!outpass.approvedByFaculty) {
+    return res.status(403).json({
+      success: false,
+      message:
+        "University approval record is incomplete: approving faculty missing.",
+    });
+  }
+
+  if (!outpass.approvedAt) {
+    return res.status(403).json({
+      success: false,
+      message:
+        "University approval record is incomplete: approval timestamp missing.",
+    });
+  }
+
+  // ============================================================
+  // CHECK QR GENERATION
+  // ============================================================
+
   if (
-    !outpass.qrGenerated ||
+    outpass.qrGenerated !== true ||
     !outpass.qrToken ||
     !outpass.qrValidFrom ||
     !outpass.qrExpiresAt ||
@@ -70,6 +143,10 @@ const getStudentQR = asyncHandler(async (req, res) => {
   }
 
   const now = new Date();
+
+  // ============================================================
+  // VERIFY QR TIME WINDOW
+  // ============================================================
 
   if (now < outpass.qrValidFrom) {
     return res.status(403).json({
@@ -85,12 +162,16 @@ const getStudentQR = asyncHandler(async (req, res) => {
     });
   }
 
+  // ============================================================
+  // VERIFY QR SIGNATURE
+  // ============================================================
+
   const verification = verifyQRSignature(outpass.qrToken, now);
 
   if (
     !verification.valid ||
-    verification.payload.outpassId !== String(outpass._id) ||
-    verification.payload.expiresAt !==
+    verification.payload?.outpassId !== String(outpass._id) ||
+    verification.payload?.expiresAt !==
       Math.floor(outpass.qrExpiresAt.getTime() / 1000)
   ) {
     return res.status(403).json({
@@ -98,6 +179,10 @@ const getStudentQR = asyncHandler(async (req, res) => {
       message: "QR integrity verification failed.",
     });
   }
+
+  // ============================================================
+  // RETURN SECURE QR
+  // ============================================================
 
   return res.status(200).json({
     success: true,

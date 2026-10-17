@@ -4,12 +4,13 @@ const asyncHandler = require("express-async-handler");
 const mongoose = require("mongoose");
 
 const { verifyExit } = require("../services/verifyExitService");
-
 const { verifyEntry } = require("../services/verifyEntryService");
 
-// ============================================================
-// AUTHENTICATED SECURITY CONTEXT
-// ============================================================
+const { previewOutpass } = require("../services/previewOutpassService");
+
+// ==============================================
+// SECURITY AUTHENTICATION
+// ==============================================
 
 const getSecurityContext = (req, res) => {
   if (
@@ -40,9 +41,9 @@ const getSecurityContext = (req, res) => {
   return securityId;
 };
 
-// ============================================================
-// VALIDATE SCAN REQUEST
-// ============================================================
+// ==============================================
+// QR SCAN VALIDATION
+// ==============================================
 
 const validateScanRequest = (req, res) => {
   const outpassId = req.params?.id;
@@ -72,9 +73,42 @@ const validateScanRequest = (req, res) => {
   };
 };
 
-// ============================================================
-// VERIFY EXIT
-// ============================================================
+// ==============================================
+// PREVIEW STUDENT DETAILS
+// NO EXIT / ENTRY UPDATE
+// ==============================================
+
+const previewOutpassController = asyncHandler(async (req, res) => {
+  const securityId = getSecurityContext(req, res);
+
+  if (!securityId) return;
+
+  const scan = validateScanRequest(req, res);
+
+  if (!scan) return;
+
+  const mode = String(req.body?.mode || "").toUpperCase();
+
+  if (!["EXIT", "ENTRY"].includes(mode)) {
+    return res.status(400).json({
+      success: false,
+      message: "Mode must be EXIT or ENTRY.",
+    });
+  }
+
+  const result = await previewOutpass(
+    scan.outpassId,
+    scan.qrToken,
+    securityId,
+    mode,
+  );
+
+  return res.status(result.success ? 200 : 400).json(result);
+});
+
+// ==============================================
+// CONFIRM EXIT
+// ==============================================
 
 const verifyExitController = asyncHandler(async (req, res) => {
   const securityId = getSecurityContext(req, res);
@@ -90,9 +124,9 @@ const verifyExitController = asyncHandler(async (req, res) => {
   return res.status(result.success ? 200 : 400).json(result);
 });
 
-// ============================================================
-// VERIFY ENTRY
-// ============================================================
+// ==============================================
+// CONFIRM ENTRY
+// ==============================================
 
 const verifyEntryController = asyncHandler(async (req, res) => {
   const securityId = getSecurityContext(req, res);
@@ -108,11 +142,8 @@ const verifyEntryController = asyncHandler(async (req, res) => {
   return res.status(result.success ? 200 : 400).json(result);
 });
 
-// ============================================================
-// EXPORTS
-// ============================================================
-
 module.exports = Object.freeze({
+  previewOutpassController,
   verifyExitController,
   verifyEntryController,
 });

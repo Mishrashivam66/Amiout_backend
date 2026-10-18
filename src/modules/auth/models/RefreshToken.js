@@ -68,6 +68,15 @@ const refreshTokenSchema = new mongoose.Schema(
       default: null,
     },
 
+    // Selected faculty role for this session.
+    // Null for existing sessions and non-faculty accounts.
+
+    activeRole: {
+      type: String,
+      enum: ["MENTOR", "COORDINATOR", "HOD", "HOI"],
+      default: null,
+    },
+
     // ======================================
     // DEVICE INFORMATION
     // ======================================

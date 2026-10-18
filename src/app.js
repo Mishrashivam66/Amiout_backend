@@ -29,6 +29,10 @@ const mentorRoutes = require("./modules/mentor/routes");
 
 const coordinatorRoutes = require("./modules/mentor/routes/coordinatorRoutes");
 
+// HOD & HOI ROUTES
+const hodRoutes = require("./modules/mentor/routes/hodRoutes");
+const hoiRoutes = require("./modules/mentor/routes/hoiRoutes");
+const outpassMonitoringRoutes = require("./modules/admin/routes/outpassMonitoring.routes");
 const { academicRoutes } = require("./modules/academic");
 
 const adminRoutes = require("./modules/admin");
@@ -91,17 +95,27 @@ app.get("/", (req, res) => {
 app.use("/api/v1/auth", authRoutes);
 
 app.use("/api/v1/auth/mentor", mentorAuthRoutes);
+app.use("/api/v1/admin/outpasses", outpassMonitoringRoutes);
+
+app.use("/api/v1/admin", adminRoutes);
 
 app.use("/api/v1/auth/admin", adminAuthRoutes);
 
 // ==========================================
-// STUDENT & MENTOR ROUTES
+// STUDENT & FACULTY ROUTES
 // ==========================================
 
 app.use("/api/v1/student", studentRoutes);
 
 app.use("/api/v1/mentor", mentorRoutes);
+
 app.use("/api/v1/coordinator", coordinatorRoutes);
+
+// HOD & HOI
+app.use("/api/v1/hod", hodRoutes);
+
+app.use("/api/v1/hoi", hoiRoutes);
+
 // ==========================================
 // ACADEMIC & ADMIN ROUTES
 // ==========================================

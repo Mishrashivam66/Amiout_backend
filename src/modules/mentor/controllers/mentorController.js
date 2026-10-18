@@ -9,6 +9,11 @@ const coordinatorOutpassService = require("../services/coordinatorOutpassService
 // ============================================================
 // HELPERS
 // ============================================================
+const {
+  approveOutpassForRole,
+} = require("../../outpass/services/sharedApprovalService");
+
+const facultyScopeOutpassService = require("../services/facultyScopeOutpassService");
 
 const getFacultyId = (req) => req.user?._id || req.user?.id;
 
@@ -303,6 +308,69 @@ const getCoordinatorOutpassDetails = asyncHandler(async (req, res) => {
 
   return sendServiceResult(res, result, 404);
 });
+
+const approveAsHOD = asyncHandler(async (req, res) => {
+  const result = await approveOutpassForRole(
+    getFacultyId(req),
+    req.params.outpassId,
+    typeof req.body?.remark === "string" ? req.body.remark.trim() : "",
+    "HOD",
+  );
+
+  return sendServiceResult(res, result, 400);
+});
+
+const approveAsHOI = asyncHandler(async (req, res) => {
+  const result = await approveOutpassForRole(
+    getFacultyId(req),
+    req.params.outpassId,
+    typeof req.body?.remark === "string" ? req.body.remark.trim() : "",
+    "HOI",
+  );
+
+  return sendServiceResult(res, result, 400);
+});
+
+const getHODOutpasses = asyncHandler(async (req, res) => {
+  const result = await facultyScopeOutpassService.listOutpasses(
+    getFacultyId(req),
+    "HOD",
+    req.query,
+  );
+
+  return sendServiceResult(res, result);
+});
+
+const getHOIOutpasses = asyncHandler(async (req, res) => {
+  const result = await facultyScopeOutpassService.listOutpasses(
+    getFacultyId(req),
+    "HOI",
+    req.query,
+  );
+
+  return sendServiceResult(res, result);
+});
+
+const getHODOutpassDetails = asyncHandler(async (req, res) => {
+  const result = await facultyScopeOutpassService.getOutpassDetails(
+    getFacultyId(req),
+    "HOD",
+    req.params.outpassId,
+  );
+
+  return sendServiceResult(res, result, 404);
+});
+
+const getHOIOutpassDetails = asyncHandler(async (req, res) => {
+  const result = await facultyScopeOutpassService.getOutpassDetails(
+    getFacultyId(req),
+    "HOI",
+    req.params.outpassId,
+  );
+
+  return sendServiceResult(res, result, 404);
+});
+
 module.exports = Object.freeze({
   // Dashboards
   getDashboard,
@@ -332,4 +400,10 @@ module.exports = Object.freeze({
   getProfile,
   updateProfile,
   updateAvailability,
+  approveAsHOD,
+  approveAsHOI,
+  getHODOutpasses,
+  getHOIOutpasses,
+  getHODOutpassDetails,
+  getHOIOutpassDetails,
 });

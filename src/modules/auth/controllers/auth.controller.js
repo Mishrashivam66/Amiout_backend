@@ -22,6 +22,7 @@ const {
   logoutService,
   getProfileService,
   updateProfileService,
+  switchRoleService,
 } = require("../services");
 
 // ==========================================
@@ -370,6 +371,32 @@ const updateProfile = async (req, res, next) => {
 };
 
 // ==========================================
+// SWITCH FACULTY ROLE
+// ==========================================
+
+const switchRole = async (req, res, next) => {
+  try {
+    if (!req.auth) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required.",
+      });
+    }
+
+    const result = await switchRoleService(
+      req.auth.id,
+      req.body?.role,
+      req.auth.accountType,
+      req.cookies?.refreshToken,
+    );
+
+    return res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ==========================================
 // EXPORTS
 // ==========================================
 
@@ -395,4 +422,5 @@ module.exports = {
 
   getProfile,
   updateProfile,
+  switchRole,
 };

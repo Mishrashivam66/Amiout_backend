@@ -2,6 +2,10 @@
 
 const Mentor = require("../modules/auth/models/Mentor");
 
+// ============================================================
+// FACULTY ROLES AND SCOPES
+// ============================================================
+
 const FACULTY_ROLES = new Set(["MENTOR", "COORDINATOR", "HOD", "HOI"]);
 
 const ROLE_SCOPE_TYPES = Object.freeze({
@@ -11,10 +15,25 @@ const ROLE_SCOPE_TYPES = Object.freeze({
   HOI: "INSTITUTE",
 });
 
+// ============================================================
+// HELPERS
+// ============================================================
+
 const normalizeRole = (value) =>
   String(value ?? "")
     .trim()
     .toUpperCase();
+
+const forbidden = (res, message, code) =>
+  res.status(403).json({
+    success: false,
+    message,
+    ...(code ? { code } : {}),
+  });
+
+// ============================================================
+// VALIDATE ACTIVE FACULTY ASSIGNMENT
+// ============================================================
 
 const isActiveRoleAssignment = (assignment, role, now) => {
   if (!assignment || assignment.isActive !== true) {
@@ -52,6 +71,10 @@ const isActiveRoleAssignment = (assignment, role, now) => {
   return true;
 };
 
+// ============================================================
+// AUTHORIZE ROLES
+// ============================================================
+
 // Supports:
 // authorize("MENTOR")
 // authorize("MENTOR", "COORDINATOR")
@@ -64,22 +87,41 @@ const authorize = (...roles) => {
 
   return async (req, res, next) => {
     try {
-      if (!req.user) {
+      // ======================================================
+      // AUTHENTICATION CHECK
+      // ======================================================
+
+      if (!req.user || !req.auth) {
         return res.status(401).json({
           success: false,
           message: "Unauthorized.",
         });
       }
 
-      if (allowedRoles.length === 0) {
-        return res.status(403).json({
-          success: false,
-          message: "No authorized roles configured.",
-        });
+      // ======================================================
+      // MANDATORY FIRST-LOGIN PASSWORD CHANGE
+      // ======================================================
+
+      if (req.auth.mustChangePassword === true) {
+        return forbidden(
+          res,
+          "You must change your temporary password before continuing.",
+          "PASSWORD_CHANGE_REQUIRED",
+        );
       }
 
-      // Read only trusted roles established by authentication
-      // middleware, never roles supplied in request body/query.
+      // ======================================================
+      // ALLOWED ROLES CHECK
+      // ======================================================
+
+      if (allowedRoles.length === 0) {
+        return forbidden(res, "No authorized roles configured.");
+      }
+
+      // ======================================================
+      // TRUSTED USER ROLES
+      // ======================================================
+
       const primaryRole = normalizeRole(req.user.role);
 
       const declaredRoles = [
@@ -89,7 +131,10 @@ const authorize = (...roles) => {
           : []),
       ].filter(Boolean);
 
-      // Non-faculty routes retain ordinary role checking.
+      // ======================================================
+      // NON-FACULTY AUTHORIZATION
+      // ======================================================
+
       const matchesNonFacultyRole = allowedRoles.some(
         (role) => !FACULTY_ROLES.has(role) && declaredRoles.includes(role),
       );
@@ -98,28 +143,32 @@ const authorize = (...roles) => {
         return next();
       }
 
+      // ======================================================
+      // FACULTY ROLES
+      // ======================================================
+
       const requestedFacultyRoles = allowedRoles.filter((role) =>
         FACULTY_ROLES.has(role),
       );
 
       if (requestedFacultyRoles.length === 0) {
-        return res.status(403).json({
-          success: false,
-          message: "Access denied.",
-        });
+        return forbidden(res, "Access denied.");
       }
+
+      // ======================================================
+      // ACCOUNT ID
+      // ======================================================
 
       const facultyId = req.user._id || req.user.id;
 
       if (!facultyId) {
-        return res.status(403).json({
-          success: false,
-          message: "Faculty account not found.",
-        });
+        return forbidden(res, "Faculty account not found.");
       }
 
-      // Faculty role authorization comes from the
-      // actual database, not only the JWT's primary role.
+      // ======================================================
+      // REVALIDATE FACULTY FROM DATABASE
+      // ======================================================
+
       const faculty = await Mentor.findById(facultyId)
         .select("role roles isActive isVerified roleAssignments")
         .lean();
@@ -129,17 +178,22 @@ const authorize = (...roles) => {
         faculty.isActive !== true ||
         faculty.isVerified !== true
       ) {
-        return res.status(403).json({
-          success: false,
-          message: "Faculty account is not active or verified.",
-        });
+        return forbidden(res, "Faculty account is not active or verified.");
       }
+
+      // ======================================================
+      // DECLARED FACULTY ROLES
+      // ======================================================
 
       const facultyDeclaredRoles = new Set(
         [faculty.role, ...(faculty.roles || [])]
           .map(normalizeRole)
           .filter(Boolean),
       );
+
+      // ======================================================
+      // VERIFY ACTIVE ASSIGNMENTS
+      // ======================================================
 
       const now = new Date();
 
@@ -152,11 +206,12 @@ const authorize = (...roles) => {
       );
 
       if (!isAuthorized) {
-        return res.status(403).json({
-          success: false,
-          message: "No active authorized faculty role assignment.",
-        });
+        return forbidden(res, "No active authorized faculty role assignment.");
       }
+
+      // ======================================================
+      // AUTHORIZED
+      // ======================================================
 
       return next();
     } catch (error) {
@@ -164,5 +219,9 @@ const authorize = (...roles) => {
     }
   };
 };
+
+// ============================================================
+// EXPORT
+// ============================================================
 
 module.exports = authorize;

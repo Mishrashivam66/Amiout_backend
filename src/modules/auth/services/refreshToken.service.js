@@ -246,7 +246,7 @@ const refreshTokenService = async (refreshToken) => {
   // SELECT AUTHORIZED ACTIVE ROLE
   // ========================================
 
-  const preferredRole = normalizeRole(account.role);
+  const preferredRole = normalizeRole(session.activeRole || account.role);
 
   const activeRole = roles.includes(preferredRole) ? preferredRole : roles[0];
 

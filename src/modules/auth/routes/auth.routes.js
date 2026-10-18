@@ -31,6 +31,7 @@ const {
 
   getProfile,
   updateProfile,
+  switchRole,
 } = require("../controllers/auth.controller");
 
 // ==========================================
@@ -174,6 +175,18 @@ router.put(
 // - mustChangePassword
 
 router.get("/me", protect, getProfile);
+
+// ==========================================
+// FACULTY ROLE SWITCHING
+// ==========================================
+
+router.post(
+  "/switch-role",
+  protect,
+  requirePasswordSetupComplete,
+  requireRoles("MENTOR", "COORDINATOR", "HOD", "HOI"),
+  switchRole,
+);
 
 // ==========================================
 // UPDATE CURRENT USER PROFILE

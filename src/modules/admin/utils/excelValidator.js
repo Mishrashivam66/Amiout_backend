@@ -1,41 +1,71 @@
 "use strict";
 
+// ============================================================
+// HELPERS
+// ============================================================
+
+const clean = (value) => String(value ?? "").trim();
+
 const isValidEmail = (email = "") => {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clean(email));
 };
 
-// ============================================================================
-// Validate Records
-// ============================================================================
+const isMissing = (value) => {
+  return value === undefined || value === null || clean(value) === "";
+};
+
+// ============================================================
+// VALIDATE EXCEL RECORDS
+// ============================================================
 
 const validateExcel = ({
   records = [],
   requiredColumns = [],
   uniqueField = "",
 }) => {
+  if (!Array.isArray(records)) {
+    throw new TypeError("Excel records must be an array.");
+  }
+
   const validRecords = [];
-
   const validationErrors = [];
-
   const duplicates = [];
 
   const seen = new Set();
+
+  let invalidRows = 0;
+  let duplicateRows = 0;
+
+  // ==========================================================
+  // PROCESS RECORDS
+  // ==========================================================
 
   records.forEach((record, index) => {
     const row = index + 2;
 
     let valid = true;
+    let isDuplicate = false;
 
-    // ============================================================================
-// Required Fields
-// ============================================================================
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      validationErrors.push({
+        row,
+        field: "record",
+        value: "",
+        message: "Invalid Excel row.",
+      });
 
-    requiredColumns.forEach((column) => {
-      if (
-        record[column] === undefined ||
-        record[column] === null ||
-        record[column].toString().trim() === ""
-      ) {
+      invalidRows++;
+      return;
+    }
+
+    // ========================================================
+    // REQUIRED COLUMNS
+    // ========================================================
+
+    for (const column of requiredColumns) {
+      const value = record[column];
+
+      if (isMissing(value)) {
         validationErrors.push({
           row,
           field: column,
@@ -45,13 +75,17 @@ const validateExcel = ({
 
         valid = false;
       }
-    });
+    }
 
-    // ============================================================================
-// Email Validation
-// ============================================================================
+    // ========================================================
+    // OPTIONAL EMAIL VALIDATION
+    // ========================================================
 
-    if (record.email && !isValidEmail(record.email)) {
+    // Existing Student Excel behavior is preserved.
+    // Faculty official email is also validated later
+    // by mentorImport.service.js.
+
+    if (!isMissing(record.email) && !isValidEmail(record.email)) {
       validationErrors.push({
         row,
         field: "email",
@@ -62,58 +96,75 @@ const validateExcel = ({
       valid = false;
     }
 
-    // ============================================================================
-// Duplicate Check (Inside Excel)
-// ============================================================================
+    // ========================================================
+    // DUPLICATE CHECK INSIDE EXCEL
+    // ========================================================
 
-    if (uniqueField && record[uniqueField]) {
-      const key = record[uniqueField].toString().trim().toLowerCase();
+    if (uniqueField && !isMissing(record[uniqueField])) {
+      const identifier = clean(record[uniqueField]);
+
+      const key = identifier.toLowerCase();
 
       if (seen.has(key)) {
         duplicates.push({
           row,
-          identifier: record[uniqueField],
+          identifier,
           reason: `${uniqueField} already exists in uploaded Excel.`,
         });
 
+        isDuplicate = true;
         valid = false;
       } else {
         seen.add(key);
       }
     }
 
-    // ============================================================================
-// Save Valid Record
-// ============================================================================
+    // ========================================================
+    // TRACK RESULT
+    // ========================================================
 
     if (valid) {
       validRecords.push(record);
+    } else if (isDuplicate) {
+      duplicateRows++;
+
+      // A duplicate row may also contain other errors.
+      // Track those separately without double-counting
+      // the same row as both invalid and duplicate.
+
+      const hasValidationError = validationErrors.some(
+        (error) => error.row === row,
+      );
+
+      if (hasValidationError) {
+        invalidRows++;
+      }
+    } else {
+      invalidRows++;
     }
   });
 
-  // ============================================================================
-// Summary
-// ============================================================================
+  // ==========================================================
+  // FINAL SUMMARY
+  // ==========================================================
 
   return {
     summary: {
       total: records.length,
       valid: validRecords.length,
-      invalid: validationErrors.length,
-      duplicates: duplicates.length,
+      invalid: invalidRows,
+      duplicates: duplicateRows,
     },
 
     validRecords,
-
     validationErrors,
-
     duplicates,
   };
 };
 
-// ============================================================================
-// Export
-// ============================================================================
+// ============================================================
+// EXPORTS
+// ============================================================
 
 module.exports = Object.freeze({
   validateExcel,

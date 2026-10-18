@@ -2,13 +2,33 @@
 
 const mongoose = require("mongoose");
 
+// ============================================================
+// FACULTY ROLES
+// ============================================================
+
 const VALID_ROLES = ["MENTOR", "COORDINATOR", "HOD", "HOI"];
+
+// ============================================================
+// ROLE HELPERS
+// ============================================================
+
+const hasRole = (document, role) => {
+  return Array.isArray(document?.roles) && document.roles.includes(role);
+};
+
+const isGroupLevelFaculty = (document) => {
+  return hasRole(document, "MENTOR") || hasRole(document, "COORDINATOR");
+};
+
+// ============================================================
+// MENTOR MASTER SCHEMA
+// ============================================================
 
 const mentorMasterSchema = new mongoose.Schema(
   {
-    // ==========================================
+    // ========================================================
     // FACULTY BASIC INFORMATION
-    // ==========================================
+    // ========================================================
 
     facultyId: {
       type: String,
@@ -42,19 +62,22 @@ const mentorMasterSchema = new mongoose.Schema(
       default: ["MENTOR"],
     },
 
-    // ==========================================
+    // ========================================================
     // ACADEMIC INFORMATION
-    // ==========================================
+    // ========================================================
 
     institute: {
       type: String,
+      required: true,
       trim: true,
       uppercase: true,
-      default: "",
     },
 
     department: {
       type: String,
+      required: function () {
+        return hasRole(this, "HOD");
+      },
       trim: true,
       uppercase: true,
       default: "",
@@ -62,6 +85,9 @@ const mentorMasterSchema = new mongoose.Schema(
 
     program: {
       type: String,
+      required: function () {
+        return isGroupLevelFaculty(this);
+      },
       trim: true,
       uppercase: true,
       default: "",
@@ -69,20 +95,29 @@ const mentorMasterSchema = new mongoose.Schema(
 
     course: {
       type: String,
-      required: true,
+      required: function () {
+        return hasRole(this, "MENTOR");
+      },
       trim: true,
       uppercase: true,
+      default: "",
     },
 
     semester: {
       type: Number,
-      required: true,
+      required: function () {
+        return isGroupLevelFaculty(this);
+      },
+      default: null,
       min: 1,
       max: 12,
     },
 
     section: {
       type: String,
+      required: function () {
+        return isGroupLevelFaculty(this);
+      },
       trim: true,
       uppercase: true,
       default: "",
@@ -90,14 +125,17 @@ const mentorMasterSchema = new mongoose.Schema(
 
     group: {
       type: String,
-      required: true,
+      required: function () {
+        return hasRole(this, "MENTOR");
+      },
       trim: true,
       uppercase: true,
+      default: "",
     },
 
-    // ==========================================
+    // ========================================================
     // FACULTY EMAIL
-    // ==========================================
+    // ========================================================
 
     mentorEmail: {
       type: String,
@@ -107,9 +145,9 @@ const mentorMasterSchema = new mongoose.Schema(
       index: true,
     },
 
-    // ==========================================
+    // ========================================================
     // COORDINATOR INFORMATION
-    // ==========================================
+    // ========================================================
 
     coordinatorGroups: {
       type: [
@@ -120,6 +158,17 @@ const mentorMasterSchema = new mongoose.Schema(
         },
       ],
       default: [],
+
+      validate: {
+        validator: function (groups) {
+          if (!hasRole(this, "COORDINATOR")) {
+            return true;
+          }
+
+          return Array.isArray(groups) && groups.length > 0;
+        },
+        message: "Coordinator Groups are required for COORDINATOR role.",
+      },
     },
 
     coordinator: {
@@ -128,9 +177,9 @@ const mentorMasterSchema = new mongoose.Schema(
       default: "",
     },
 
-    // ==========================================
+    // ========================================================
     // STUDENT INFORMATION
-    // ==========================================
+    // ========================================================
 
     totalStudents: {
       type: Number,
@@ -138,9 +187,9 @@ const mentorMasterSchema = new mongoose.Schema(
       min: 0,
     },
 
-    // ==========================================
+    // ========================================================
     // FACULTY LOGIN ACCOUNT LINK
-    // ==========================================
+    // ========================================================
 
     mentorUser: {
       type: mongoose.Schema.Types.ObjectId,
@@ -149,9 +198,9 @@ const mentorMasterSchema = new mongoose.Schema(
       index: true,
     },
 
-    // ==========================================
-    // RECORD STATUS
-    // ==========================================
+    // ========================================================
+    // FACULTY AVAILABILITY
+    // ========================================================
 
     availabilityStatus: {
       type: String,
@@ -164,6 +213,10 @@ const mentorMasterSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+
+    // ========================================================
+    // RECORD STATUS
+    // ========================================================
 
     isActive: {
       type: Boolean,
@@ -183,18 +236,20 @@ const mentorMasterSchema = new mongoose.Schema(
   },
 );
 
-// ==========================================
+// ============================================================
 // INDEXES
-// ==========================================
+// ============================================================
 
-// Faculty ID is NOT unique here.
-// One faculty can have multiple group assignments.
+// Faculty ID is NOT unique.
+// One faculty can have multiple academic assignments.
+
 mentorMasterSchema.index({
   facultyId: 1,
   isDeleted: 1,
 });
 
 // Academic group lookup
+
 mentorMasterSchema.index({
   institute: 1,
   program: 1,
@@ -204,7 +259,23 @@ mentorMasterSchema.index({
   isDeleted: 1,
 });
 
+// Department lookup for HOD
+
+mentorMasterSchema.index({
+  institute: 1,
+  department: 1,
+  isDeleted: 1,
+});
+
+// Institute lookup for HOI
+
+mentorMasterSchema.index({
+  institute: 1,
+  isDeleted: 1,
+});
+
 // Legacy course lookup
+
 mentorMasterSchema.index({
   course: 1,
   semester: 1,
@@ -213,13 +284,14 @@ mentorMasterSchema.index({
 });
 
 // Faculty name lookup
+
 mentorMasterSchema.index({
   name: 1,
 });
 
-// ==========================================
+// ============================================================
 // JSON TRANSFORM
-// ==========================================
+// ============================================================
 
 mentorMasterSchema.set("toJSON", {
   virtuals: true,
@@ -227,12 +299,13 @@ mentorMasterSchema.set("toJSON", {
   transform(doc, ret) {
     delete ret.__v;
     delete ret.isDeleted;
+
     return ret;
   },
 });
 
-// ==========================================
-// EXPORT MODEL
-// ==========================================
+// ============================================================
+// EXPORT
+// ============================================================
 
 module.exports = mongoose.model("MentorMaster", mentorMasterSchema);

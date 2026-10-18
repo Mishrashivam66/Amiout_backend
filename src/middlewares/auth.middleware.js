@@ -18,9 +18,9 @@ const {
 
 const logger = require("../utils/logger");
 
-// ==========================================
+// ============================================================
 // ERROR RESPONSE
-// ==========================================
+// ============================================================
 
 const authError = (res, status, message, code) => {
   return res.status(status).json({
@@ -30,9 +30,9 @@ const authError = (res, status, message, code) => {
   });
 };
 
-// ==========================================
+// ============================================================
 // VERIFY ACTIVE MENTOR MAPPING
-// ==========================================
+// ============================================================
 
 const hasActiveMentorMapping = async (user) => {
   const mapping = await MentorMaster.exists({
@@ -44,9 +44,9 @@ const hasActiveMentorMapping = async (user) => {
   return Boolean(mapping);
 };
 
-// ==========================================
-// CHECK PASSWORD CHANGE TIMESTAMP
-// ==========================================
+// ============================================================
+// PASSWORD CHANGE TOKEN INVALIDATION
+// ============================================================
 
 const wasTokenIssuedBeforePasswordChange = (decoded, user) => {
   if (!user.passwordChangedAt) {
@@ -63,24 +63,80 @@ const wasTokenIssuedBeforePasswordChange = (decoded, user) => {
     return true;
   }
 
-  // JWT iat has second-level precision.
-  // Tokens issued in the same second as
-  // the password change are rejected too.
+  // JWT iat is measured in whole seconds.
+  // Avoid rejecting a freshly issued token
+  // merely because passwordChangedAt contains
+  // milliseconds within the same second.
 
-  const tokenIssuedAtMs = decoded.iat * 1000;
+  const changedAtSeconds = Math.floor(changedAtMs / 1000);
 
-  return tokenIssuedAtMs < changedAtMs;
+  return decoded.iat < changedAtSeconds;
 };
 
-// ==========================================
+// ============================================================
+// FIRST-LOGIN ALLOWED ROUTES
+// ============================================================
+
+const isPasswordSetupRoute = (req) => {
+  const baseUrl = String(req.baseUrl || "").replace(/\/+$/, "");
+
+  // Auth router must be mounted at
+  // /auth or a versioned prefix ending /auth.
+
+  const isAuthRouter = /(^|\/)auth$/.test(baseUrl);
+
+  if (!isAuthRouter) {
+    return false;
+  }
+
+  const routePath = req.route?.path;
+
+  if (typeof routePath !== "string") {
+    return false;
+  }
+
+  const allowedRoutes = [
+    {
+      method: "GET",
+      path: "/me",
+    },
+    {
+      method: "PUT",
+      path: "/change-password",
+    },
+    {
+      method: "POST",
+      path: "/logout",
+    },
+  ];
+
+  return allowedRoutes.some(
+    (route) => req.method === route.method && routePath === route.path,
+  );
+};
+
+// ============================================================
+// PASSWORD SETUP RESPONSE
+// ============================================================
+
+const passwordSetupRequired = (res) => {
+  return authError(
+    res,
+    403,
+    "You must change your temporary password before continuing.",
+    "PASSWORD_CHANGE_REQUIRED",
+  );
+};
+
+// ============================================================
 // PROTECT MIDDLEWARE
-// ==========================================
+// ============================================================
 
 const protect = async (req, res, next) => {
   try {
-    // ======================================
-    // GET BEARER TOKEN
-    // ======================================
+    // ========================================================
+    // EXTRACT TOKEN
+    // ========================================================
 
     const authorization = req.headers.authorization || "";
 
@@ -90,9 +146,9 @@ const protect = async (req, res, next) => {
       return authError(res, 401, "Access token is required.");
     }
 
-    // ======================================
-    // VERIFY ACCESS TOKEN
-    // ======================================
+    // ========================================================
+    // VERIFY TOKEN
+    // ========================================================
 
     const decoded = verifyAccessToken(token);
 
@@ -115,9 +171,9 @@ const protect = async (req, res, next) => {
       return authError(res, 401, "Invalid account type or role.");
     }
 
-    // ======================================
-    // FIND ACCOUNT
-    // ======================================
+    // ========================================================
+    // LOAD ACCOUNT
+    // ========================================================
 
     const user = await findAccountById(decoded.id, accountType);
 
@@ -125,9 +181,9 @@ const protect = async (req, res, next) => {
       return authError(res, 401, "Account not found.");
     }
 
-    // ======================================
-    // VERIFY ACCOUNT STATUS
-    // ======================================
+    // ========================================================
+    // ACCOUNT STATUS
+    // ========================================================
 
     if (!user.isActive) {
       return authError(res, 403, "Your account has been deactivated.");
@@ -141,9 +197,9 @@ const protect = async (req, res, next) => {
       return authError(res, 403, "Account is not authorized.");
     }
 
-    // ======================================
-    // INVALIDATE OLD ACCESS TOKENS
-    // ======================================
+    // ========================================================
+    // PASSWORD CHANGE TOKEN CHECK
+    // ========================================================
 
     if (wasTokenIssuedBeforePasswordChange(decoded, user)) {
       return authError(
@@ -154,9 +210,9 @@ const protect = async (req, res, next) => {
       );
     }
 
-    // ======================================
-    // RESOLVE AUTHORIZED ROLES
-    // ======================================
+    // ========================================================
+    // AUTHORIZED ROLES
+    // ========================================================
 
     const authorizedRoles = [
       ...new Set(
@@ -170,9 +226,9 @@ const protect = async (req, res, next) => {
       return authError(res, 403, "Role is not assigned or has expired.");
     }
 
-    // ======================================
-    // VERIFY MENTOR MAPPING
-    // ======================================
+    // ========================================================
+    // MENTOR MAPPING CHECK
+    // ========================================================
 
     if (accountType === "FACULTY" && activeRole === "MENTOR") {
       const hasMapping = await hasActiveMentorMapping(user);
@@ -182,9 +238,9 @@ const protect = async (req, res, next) => {
       }
     }
 
-    // ======================================
-    // ACTIVE FACULTY ASSIGNMENTS
-    // ======================================
+    // ========================================================
+    // FACULTY ASSIGNMENTS
+    // ========================================================
 
     let activeAssignments = [];
 
@@ -192,9 +248,9 @@ const protect = async (req, res, next) => {
       activeAssignments = getActiveFacultyAssignments(user);
     }
 
-    // ======================================
+    // ========================================================
     // ATTACH AUTH CONTEXT
-    // ======================================
+    // ========================================================
 
     req.user = user;
 
@@ -213,15 +269,15 @@ const protect = async (req, res, next) => {
       mustChangePassword: user.mustChangePassword === true,
     };
 
-    // ======================================
-    // FIRST LOGIN PASSWORD RESTRICTION
-    // ======================================
+    // ========================================================
+    // MANDATORY FIRST-LOGIN PASSWORD CHANGE
+    // ========================================================
 
-    // protect must allow /auth/me,
-    // /auth/change-password and /auth/logout.
-    //
-    // Other protected routes must also
-    // enforce password setup completion.
+    if (req.auth.mustChangePassword) {
+      if (!isPasswordSetupRoute(req)) {
+        return passwordSetupRequired(res);
+      }
+    }
 
     return next();
   } catch (error) {
@@ -231,9 +287,9 @@ const protect = async (req, res, next) => {
   }
 };
 
-// ==========================================
+// ============================================================
 // REQUIRE PASSWORD SETUP COMPLETE
-// ==========================================
+// ============================================================
 
 const requirePasswordSetupComplete = (req, res, next) => {
   if (!req.auth) {
@@ -241,20 +297,15 @@ const requirePasswordSetupComplete = (req, res, next) => {
   }
 
   if (req.auth.mustChangePassword) {
-    return authError(
-      res,
-      403,
-      "You must change your temporary password before continuing.",
-      "PASSWORD_CHANGE_REQUIRED",
-    );
+    return passwordSetupRequired(res);
   }
 
   return next();
 };
 
-// ==========================================
+// ============================================================
 // REQUIRE ROLES
-// ==========================================
+// ============================================================
 
 const requireRoles = (...allowedRoles) => {
   const normalizedAllowedRoles = allowedRoles.map(normalizeRole);
@@ -265,12 +316,7 @@ const requireRoles = (...allowedRoles) => {
     }
 
     if (req.auth.mustChangePassword) {
-      return authError(
-        res,
-        403,
-        "You must change your temporary password before continuing.",
-        "PASSWORD_CHANGE_REQUIRED",
-      );
+      return passwordSetupRequired(res);
     }
 
     const activeRole = normalizeRole(req.auth.role);
@@ -283,9 +329,9 @@ const requireRoles = (...allowedRoles) => {
   };
 };
 
-// ==========================================
+// ============================================================
 // REQUIRE FACULTY SCOPE
-// ==========================================
+// ============================================================
 
 const requireFacultyScope = (requiredScopeType) => {
   const normalizedScopeType = String(requiredScopeType || "")
@@ -305,12 +351,7 @@ const requireFacultyScope = (requiredScopeType) => {
     }
 
     if (req.auth.mustChangePassword) {
-      return authError(
-        res,
-        403,
-        "You must change your temporary password before continuing.",
-        "PASSWORD_CHANGE_REQUIRED",
-      );
+      return passwordSetupRequired(res);
     }
 
     if (req.auth.accountType !== "FACULTY") {
@@ -349,9 +390,9 @@ const requireFacultyScope = (requiredScopeType) => {
   };
 };
 
-// ==========================================
+// ============================================================
 // EXPORTS
-// ==========================================
+// ============================================================
 
 module.exports = Object.freeze({
   protect,

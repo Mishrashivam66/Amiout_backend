@@ -4,33 +4,62 @@ const express = require("express");
 
 const userController = require("../controllers/user.controller");
 
+const credentialController = require("../controllers/credential.controller");
+
 const { protect } = require("../../../middlewares/auth.middleware");
+
 const authorize = require("../../../middlewares/role.middleware");
 
 const ROLES = require("../../auth/constants/roles");
 
 const router = express.Router();
 
-// ============================================================================
-// User Management Routes
-// ============================================================================
+// ============================================================
+// ALL USER MANAGEMENT ROUTES ARE ADMIN ONLY
+// ============================================================
 
-router.get("/", protect, authorize(ROLES.ADMIN), userController.getAllUsers);
+router.use(protect, authorize(ROLES.ADMIN));
 
-router.get("/:id", protect, authorize(ROLES.ADMIN), userController.getUserById);
+// ============================================================
+// CREDENTIAL MANAGEMENT
+// ============================================================
 
-router.patch(
-  "/:id/activate",
-  protect,
-  authorize(ROLES.ADMIN),
-  userController.activateUser,
+// Imported Student / Faculty listing,
+// filter, search, counts and pagination.
+
+router.get(
+  "/credentials/candidates",
+  credentialController.getCredentialCandidates,
 );
 
-router.patch(
-  "/:id/deactivate",
-  protect,
-  authorize(ROLES.ADMIN),
-  userController.deactivateUser,
+// Delivery history.
+
+router.get("/credentials/status", credentialController.getCredentialStatuses);
+
+// Send initial Student login credentials.
+
+router.post(
+  "/credentials/students/:id/send",
+  credentialController.sendStudentCredentials,
 );
+
+// Send initial Faculty login credentials.
+
+router.post(
+  "/credentials/faculty/:id/send",
+  credentialController.sendFacultyCredentials,
+);
+
+// ============================================================
+// EXISTING USER MANAGEMENT
+// ============================================================
+
+router.get("/", userController.getAllUsers);
+
+router.get("/:id", userController.getUserById);
+
+router.patch("/:id/activate", userController.activateUser);
+
+router.patch("/:id/deactivate", userController.deactivateUser);
 
 module.exports = Object.freeze(router);

@@ -22,4 +22,6 @@ router.get(
   outpassController.getAllOutpasses,
 );
 
+
+
 module.exports = Object.freeze(router);

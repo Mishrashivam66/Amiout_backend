@@ -269,6 +269,46 @@ const findActiveSessions = async (userId, accountType) => {
 };
 
 // ==========================================
+// UPDATE AUTHORIZED FACULTY SESSION ROLE
+// ==========================================
+
+const updateSessionActiveRole = async ({
+  token,
+  userId,
+  sessionId,
+  activeRole,
+}) => {
+  if (
+    typeof token !== "string" ||
+    !token.trim() ||
+    !mongoose.isValidObjectId(userId) ||
+    typeof sessionId !== "string" ||
+    !sessionId.trim() ||
+    !["MENTOR", "COORDINATOR", "HOD", "HOI"].includes(activeRole)
+  ) {
+    return null;
+  }
+
+  return RefreshToken.findOneAndUpdate(
+    {
+      token,
+      user: userId,
+      accountType: "FACULTY",
+      sessionId,
+      isRevoked: false,
+      expiresAt: { $gt: new Date() },
+    },
+    {
+      $set: { activeRole },
+    },
+    {
+      new: true,
+      runValidators: true,
+    },
+  );
+};
+
+// ==========================================
 // EXPORTS
 // ==========================================
 
@@ -298,4 +338,6 @@ module.exports = {
   revokeRefreshToken,
   revokeAllUserTokens,
   findActiveSessions,
+
+  updateSessionActiveRole,
 };

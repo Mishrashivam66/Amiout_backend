@@ -83,7 +83,7 @@ module.exports = {
 
   refreshTokenService: require("./refreshToken.service"),
   logoutService: require("./logout.service"),
-
+  switchRoleService: require("./switchRole.service"),
   // ========================================
   // PASSWORD MANAGEMENT
   // ========================================

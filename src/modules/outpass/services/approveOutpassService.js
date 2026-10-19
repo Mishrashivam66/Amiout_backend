@@ -1,20 +1,23 @@
 "use strict";
 
-const legacy = require("./legacyApproveOutpassService");
-
 const { approveOutpassForRole } = require("./sharedApprovalService");
 
-const approveOutpass = (
+// ============================================================
+// AMIOUT ENTERPRISE - FACULTY APPROVAL ENTRY POINT
+//
+// Mentor approval uses unified service by default.
+// Coordinator, HOD and HOI must pass a trusted role
+// from their protected backend controllers.
+//
+// No legacy approval fallback.
+// ============================================================
+
+const approveOutpass = async (
   facultyId,
   outpassId,
   remark = "",
-  trustedActiveRole = null,
+  trustedActiveRole = "MENTOR",
 ) => {
-  // Existing Mentor/Coordinator controllers remain compatible.
-  if (!trustedActiveRole) {
-    return legacy.approveOutpass(facultyId, outpassId, remark);
-  }
-
   return approveOutpassForRole(facultyId, outpassId, remark, trustedActiveRole);
 };
 

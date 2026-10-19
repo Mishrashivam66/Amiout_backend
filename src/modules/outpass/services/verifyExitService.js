@@ -13,13 +13,23 @@ const {
 } = require("./qrService");
 
 const { exitVerifiedEvent } = require("../utils/timelineHelper");
-
 const { createActivity } = require("../../student/services/activityService");
-
 const { buildSecurityResponse } = require("../utils/securityResponse");
 
 // ============================================================
-// CONSTANTS
+// AMIOUT ENTERPRISE - SECURITY CONFIRM EXIT
+//
+// Scan QR -> Student Details -> Confirm EXIT
+//
+// Preserves:
+// - Official gate time
+// - Signed QR verification
+// - Verified institutional approval
+// - Parent consent / documented faculty bypass
+// - Explicit parent rejection protection
+// - Atomic EXIT update
+// - Duplicate EXIT prevention
+// - Student timeline and activity
 // ============================================================
 
 const AUTHORIZED_ROLES = new Set([
@@ -30,13 +40,21 @@ const AUTHORIZED_ROLES = new Set([
   "HOI",
 ]);
 
+const PARENT_BYPASS_PREFIX = "PARENT_PENDING_BYPASS:";
+
 const fail = (message) => ({
   success: false,
   message,
 });
 
-const sameId = (a, b) =>
-  Boolean(a && b) && String(a?._id || a) === String(b?._id || b);
+const normalize = (value) =>
+  String(value ?? "")
+    .trim()
+    .toUpperCase();
+
+const getId = (value) => String(value?._id || value || "");
+
+const sameId = (a, b) => Boolean(getId(a)) && getId(a) === getId(b);
 
 const tokensMatch = (a, b) => {
   if (typeof a !== "string" || typeof b !== "string") {
@@ -51,8 +69,7 @@ const tokensMatch = (a, b) => {
 };
 
 // ============================================================
-// UNIVERSITY GATE TIME
-// 09:15 AM TO 06:00 PM IST
+// OFFICIAL GATE WINDOW: 09:15 AM - 06:00 PM IST
 // ============================================================
 
 const isWithinGateWindow = (now = new Date()) => {
@@ -72,31 +89,132 @@ const isWithinGateWindow = (now = new Date()) => {
 };
 
 // ============================================================
-// PARENT AUTHORIZATION VALIDATION
+// FACULTY-AUTHORIZED PARENT BYPASS
 //
-// 1. Parent Approved:
-//    Must have verified SMS or phone consent.
+// Current approval format:
+// approvalBypass.reason = plain text reason
+// parentConsentAcknowledgement.remark = same reason
 //
-// 2. Parent Pending:
-//    Must have an authorized faculty bypass
-//    with matching approver, role and audit.
+// Legacy prefixed reasons are also recognized.
 //
-// 3. Parent Rejected:
-//    Always blocked.
+// Neither a blank reason nor mismatched audit is accepted.
+// ============================================================
+
+const hasValidParentBypass = (outpass) => {
+  const bypass = outpass.approvalBypass;
+  const acknowledgement = outpass.parentConsentAcknowledgement;
+
+  if (
+    normalize(outpass.parentDecision?.status) !== "PENDING" ||
+    normalize(outpass.parentDecision?.callOutcome) === "REJECTED"
+  ) {
+    return false;
+  }
+
+  if (
+    !outpass.approvedByFaculty ||
+    !outpass.approvedAt ||
+    !outpass.approvedAuthorityRole
+  ) {
+    return false;
+  }
+
+  const approvedRole = normalize(outpass.approvedAuthorityRole);
+
+  if (!AUTHORIZED_ROLES.has(approvedRole)) {
+    return false;
+  }
+
+  if (
+    bypass?.used !== true ||
+    !bypass.performedBy ||
+    !bypass.performedAt ||
+    !bypass.authorityRole
+  ) {
+    return false;
+  }
+
+  if (!sameId(bypass.performedBy, outpass.approvedByFaculty)) {
+    return false;
+  }
+
+  if (normalize(bypass.authorityRole) !== approvedRole) {
+    return false;
+  }
+
+  // Accept saved plain-text reason and legacy prefixed reason.
+  const storedReason = String(bypass.reason || "").trim();
+
+  const documentedReason = storedReason.startsWith(PARENT_BYPASS_PREFIX)
+    ? storedReason.slice(PARENT_BYPASS_PREFIX.length).trim()
+    : storedReason;
+
+  if (documentedReason.length < 10 || documentedReason.length > 500) {
+    return false;
+  }
+
+  if (normalize(acknowledgement?.parentStatusAtApproval) !== "PENDING") {
+    return false;
+  }
+
+  if (!sameId(acknowledgement.acknowledgedBy, outpass.approvedByFaculty)) {
+    return false;
+  }
+
+  if (normalize(acknowledgement.acknowledgedRole) !== approvedRole) {
+    return false;
+  }
+
+  if (!acknowledgement.acknowledgedAt) {
+    return false;
+  }
+
+  const acknowledgedReason = String(acknowledgement.remark || "").trim();
+
+  if (!acknowledgedReason || acknowledgedReason !== documentedReason) {
+    return false;
+  }
+
+  const approvalTime = new Date(outpass.approvedAt).getTime();
+  const bypassTime = new Date(bypass.performedAt).getTime();
+  const acknowledgementTime = new Date(
+    acknowledgement.acknowledgedAt,
+  ).getTime();
+
+  if (
+    !Number.isFinite(approvalTime) ||
+    !Number.isFinite(bypassTime) ||
+    !Number.isFinite(acknowledgementTime)
+  ) {
+    return false;
+  }
+
+  if (approvalTime !== bypassTime || approvalTime !== acknowledgementTime) {
+    return false;
+  }
+
+  return true;
+};
+
+// ============================================================
+// PARENT AUTHORIZATION
 // ============================================================
 
 const validateParentAuthorization = (outpass) => {
-  const parentStatus = outpass.parentDecision?.status || "PENDING";
+  const parentStatus = normalize(outpass.parentDecision?.status || "PENDING");
 
   if (
     parentStatus === "REJECTED" ||
-    outpass.parentDecision?.callOutcome === "REJECTED"
+    normalize(outpass.parentDecision?.callOutcome) === "REJECTED"
   ) {
     return fail("Parent rejected this outpass. EXIT is blocked.");
   }
 
   if (parentStatus === "APPROVED") {
-    if (!outpass.hasParentConsent()) {
+    if (
+      typeof outpass.hasParentConsent !== "function" ||
+      outpass.hasParentConsent() !== true
+    ) {
       return fail("Verified parent consent record is incomplete.");
     }
 
@@ -111,26 +229,7 @@ const validateParentAuthorization = (outpass) => {
     return fail("Invalid parent decision status.");
   }
 
-  const bypass = outpass.approvalBypass;
-  const acknowledgement = outpass.parentConsentAcknowledgement;
-
-  const bypassValid =
-    bypass?.used === true &&
-    Boolean(bypass.performedBy) &&
-    Boolean(bypass.authorityRole) &&
-    Boolean(bypass.performedAt) &&
-    typeof bypass.reason === "string" &&
-    bypass.reason.startsWith("PARENT_PENDING_BYPASS:") &&
-    bypass.reason.trim().length > 25 &&
-    sameId(bypass.performedBy, outpass.approvedByFaculty) &&
-    String(bypass.authorityRole) === String(outpass.approvedAuthorityRole) &&
-    acknowledgement?.parentStatusAtApproval === "PENDING" &&
-    sameId(acknowledgement.acknowledgedBy, outpass.approvedByFaculty) &&
-    String(acknowledgement.acknowledgedRole) ===
-      String(outpass.approvedAuthorityRole) &&
-    Boolean(acknowledgement.acknowledgedAt);
-
-  if (!bypassValid) {
+  if (!hasValidParentBypass(outpass)) {
     return fail(
       "Parent approval is pending and no valid faculty-authorized bypass is recorded.",
     );
@@ -144,7 +243,7 @@ const validateParentAuthorization = (outpass) => {
 };
 
 // ============================================================
-// POPULATE SECURITY RESPONSE
+// POPULATE SECURITY DETAILS
 // ============================================================
 
 const populateSecurityDetails = async (outpass) => {
@@ -168,7 +267,7 @@ const populateSecurityDetails = async (outpass) => {
       },
     ]);
   } catch (error) {
-    console.error("Security detail population failed:", error.message);
+    console.error("Security EXIT detail population failed:", error.message);
   }
 
   return outpass;
@@ -179,9 +278,7 @@ const populateSecurityDetails = async (outpass) => {
 // ============================================================
 
 const verifyExit = async (outpassId, qrToken, securityGuardId) => {
-  // ----------------------------------------------------------
-  // STEP 1: INPUT VALIDATION
-  // ----------------------------------------------------------
+  // STEP 1: Input validation
 
   if (
     !mongoose.isValidObjectId(outpassId) ||
@@ -190,15 +287,13 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
     return fail("Invalid outpass or security guard ID.");
   }
 
-  if (typeof qrToken !== "string" || !qrToken.trim()) {
-    return fail("QR token is required.");
+  if (typeof qrToken !== "string" || !qrToken.trim() || qrToken.length > 4096) {
+    return fail("Valid QR token is required.");
   }
 
   const now = new Date();
 
-  // ----------------------------------------------------------
-  // STEP 2: GATE WINDOW
-  // ----------------------------------------------------------
+  // STEP 2: Official gate window
 
   if (!isWithinGateWindow(now)) {
     return fail(
@@ -206,9 +301,7 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
     );
   }
 
-  // ----------------------------------------------------------
-  // STEP 3: VERIFY QR SIGNATURE
-  // ----------------------------------------------------------
+  // STEP 3: Signed QR validation
 
   const verification = verifyQRSignature(qrToken, now);
 
@@ -220,9 +313,7 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
     return fail("QR token does not belong to this outpass.");
   }
 
-  // ----------------------------------------------------------
-  // STEP 4: LOAD OUTPASS WITH PRIVATE QR TOKEN
-  // ----------------------------------------------------------
+  // STEP 4: Load outpass
 
   const outpass = await Outpass.findOne({
     _id: outpassId,
@@ -233,9 +324,7 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
     return fail("Outpass not found.");
   }
 
-  // ----------------------------------------------------------
-  // STEP 5: OUTPASS APPROVAL STATUS
-  // ----------------------------------------------------------
+  // STEP 5: Approval status and duplicate protection
 
   if (outpass.status !== OUTPASS_STATUS.APPROVED) {
     return fail("Only approved outpasses can be used for EXIT.");
@@ -245,13 +334,9 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
     return fail("EXIT is already verified.");
   }
 
-  // ----------------------------------------------------------
-  // STEP 6: UNIVERSITY APPROVAL
-  // ----------------------------------------------------------
+  // STEP 6: University approval
 
-  const approvedRole = String(
-    outpass.approvedAuthorityRole || "",
-  ).toUpperCase();
+  const approvedRole = normalize(outpass.approvedAuthorityRole);
 
   if (
     !outpass.approvedByFaculty ||
@@ -261,9 +346,7 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
     return fail("Valid university approval is required before EXIT.");
   }
 
-  // ----------------------------------------------------------
-  // STEP 7: PARENT APPROVAL OR AUDITED BYPASS
-  // ----------------------------------------------------------
+  // STEP 7: Parent authorization
 
   const parentCheck = validateParentAuthorization(outpass);
 
@@ -271,9 +354,7 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
     return parentCheck;
   }
 
-  // ----------------------------------------------------------
-  // STEP 8: STORED QR CHECK
-  // ----------------------------------------------------------
+  // STEP 8: Stored QR validation
 
   if (
     outpass.qrGenerated !== true ||
@@ -287,15 +368,19 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
     return fail("QR pass has been revoked.");
   }
 
-  // ----------------------------------------------------------
-  // STEP 9: QR DATE AND VALIDITY
-  // ----------------------------------------------------------
+  // STEP 9: QR date and validity
 
   if (!isWithinQRValidityWindow(outpass.outDate, now)) {
     return fail("QR is outside its approved date or time window.");
   }
 
-  const { validFrom, expiresAt } = getValidityWindow(outpass.outDate);
+  let validity;
+
+  try {
+    validity = getValidityWindow(outpass.outDate);
+  } catch (error) {
+    return fail("Invalid outpass QR validity window.");
+  }
 
   const savedValidFrom = outpass.qrValidFrom
     ? new Date(outpass.qrValidFrom)
@@ -312,22 +397,27 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
     !Number.isFinite(savedExpiresAt.getTime()) ||
     now < savedValidFrom ||
     now >= savedExpiresAt ||
-    now < validFrom ||
-    now >= expiresAt
+    now < validity.validFrom ||
+    now >= validity.expiresAt
   ) {
     return fail("QR pass is outside its permitted validity window.");
   }
 
   if (
-    verification.payload.expiresAt !==
+    savedValidFrom.getTime() !== validity.validFrom.getTime() ||
+    savedExpiresAt.getTime() !== validity.expiresAt.getTime()
+  ) {
+    return fail("QR validity does not match university policy.");
+  }
+
+  if (
+    verification.payload?.expiresAt !==
     Math.floor(savedExpiresAt.getTime() / 1000)
   ) {
     return fail("QR token expiry does not match the issued pass.");
   }
 
-  // ----------------------------------------------------------
-  // STEP 10: FINAL TIME CHECK
-  // ----------------------------------------------------------
+  // STEP 10: Final time check
 
   const verificationTime = new Date();
 
@@ -340,27 +430,21 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
     return fail("Security gate verification window has closed.");
   }
 
-  // ----------------------------------------------------------
-  // STEP 11: ATOMIC EXIT FILTER
-  // ----------------------------------------------------------
+  // STEP 11: Atomic EXIT filter
 
   const filter = {
     _id: outpass._id,
     isDeleted: false,
-
     status: OUTPASS_STATUS.APPROVED,
 
     exitVerified: false,
     exitVerifiedAt: null,
 
     approvedByFaculty: outpass.approvedByFaculty,
-
     approvedAt: outpass.approvedAt,
-
     approvedAuthorityRole: outpass.approvedAuthorityRole,
 
     "parentDecision.status": parentCheck.parentStatus,
-
     "parentDecision.callOutcome": outpass.parentDecision?.callOutcome ?? null,
 
     qrGenerated: true,
@@ -370,26 +454,22 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
     qrValidFrom: {
       $lte: verificationTime,
     },
-
     qrExpiresAt: {
       $gt: verificationTime,
     },
   };
 
-  // Ensure parent state hasn't changed before EXIT.
+  // STEP 12: Keep parent/audit state consistent
+  // between QR inspection and atomic EXIT update.
 
   if (parentCheck.parentStatus === "PENDING") {
     filter["parentDecision.decidedAt"] = null;
 
     filter["approvalBypass.used"] = true;
-
     filter["approvalBypass.performedBy"] = outpass.approvalBypass.performedBy;
-
     filter["approvalBypass.authorityRole"] =
       outpass.approvalBypass.authorityRole;
-
     filter["approvalBypass.performedAt"] = outpass.approvalBypass.performedAt;
-
     filter["approvalBypass.reason"] = outpass.approvalBypass.reason;
 
     filter["parentConsentAcknowledgement.parentStatusAtApproval"] = "PENDING";
@@ -402,6 +482,9 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
 
     filter["parentConsentAcknowledgement.acknowledgedAt"] =
       outpass.parentConsentAcknowledgement.acknowledgedAt;
+
+    filter["parentConsentAcknowledgement.remark"] =
+      outpass.parentConsentAcknowledgement.remark;
   } else {
     filter["parentDecision.decidedAt"] = outpass.parentDecision.decidedAt;
 
@@ -419,15 +502,14 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
     }
   }
 
-  // ----------------------------------------------------------
-  // STEP 12: CONFIRM EXIT ATOMICALLY
-  // ----------------------------------------------------------
+  // STEP 13: Atomically confirm EXIT
 
   const updatedOutpass = await Outpass.findOneAndUpdate(
     filter,
     {
       $set: {
         status: OUTPASS_STATUS.EXITED,
+
         exitVerified: true,
         exitVerifiedAt: verificationTime,
         exitVerifiedBy: securityGuardId,
@@ -449,9 +531,7 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
     );
   }
 
-  // ----------------------------------------------------------
-  // STEP 13: STUDENT ACTIVITY
-  // ----------------------------------------------------------
+  // STEP 14: Student activity
 
   try {
     await createActivity({
@@ -464,28 +544,21 @@ const verifyExit = async (outpassId, qrToken, securityGuardId) => {
         "EXIT verified by campus security.",
 
       type: "EXIT_VERIFIED",
-
       outpass: updatedOutpass._id,
-
       icon: "shield-check",
-
       color: "green",
     });
   } catch (error) {
     console.error("EXIT activity failed:", error.message);
   }
 
-  // ----------------------------------------------------------
-  // STEP 14: SECURITY RESPONSE
-  // ----------------------------------------------------------
+  // STEP 15: Security response
 
   await populateSecurityDetails(updatedOutpass);
 
   return {
     success: true,
-
     message: "Student EXIT verified successfully.",
-
     data: buildSecurityResponse(updatedOutpass),
   };
 };

@@ -28,7 +28,19 @@ const {
 } = require("../../notification/constants/notificationConstants");
 
 // ============================================================
-// CONFIGURATION
+// AMIOUT ENTERPRISE - SHARED FACULTY APPROVAL SERVICE
+//
+// Parent APPROVED:
+//   Normal institutional approval. No reason mandatory.
+//
+// Parent PENDING:
+//   Faculty-authorized bypass with mandatory audit reason.
+//
+// Parent REJECTED:
+//   Cannot approve under any circumstances.
+//
+// Higher authority direct approval remains audited.
+// QR, daily limits, transactions and scope checks preserved.
 // ============================================================
 
 const ROLE_SCOPES = Object.freeze({
@@ -39,10 +51,6 @@ const ROLE_SCOPES = Object.freeze({
 });
 
 const NORMAL_ROLES = ["MENTOR", "COORDINATOR", "HOD", "HOI"];
-
-// ============================================================
-// HELPERS
-// ============================================================
 
 const normalize = (value) =>
   String(value ?? "")
@@ -61,7 +69,7 @@ const fail = (message) => ({
 });
 
 // ============================================================
-// CHECK ACTIVE ROLE AND ACADEMIC SCOPE
+// ACTIVE ROLE AND ACADEMIC SCOPE VERIFICATION
 // ============================================================
 
 function hasScope(faculty, role, scope, now) {
@@ -91,19 +99,18 @@ function hasScope(faculty, role, scope, now) {
 // CHECK FACULTY AUTHORITY
 //
 // Mentor:
-//   Own mapped group and current Mentor assignment.
+//   Own mapped group and assigned outpass.
 //
 // Coordinator:
-//   Entire assigned section.
+//   Authorized section.
 //
 // HOD:
-//   Entire assigned department.
+//   Authorized department.
 //
 // HOI:
-//   Entire assigned institute.
+//   Authorized institute.
 //
-// Availability is used only for Mentor/Backup Mentor.
-// Higher authorities can directly approve without waiting.
+// Higher authorities retain existing direct approval.
 // ============================================================
 
 async function checkAuthority({
@@ -188,8 +195,7 @@ async function checkAuthority({
     return false;
   }
 
-  // Validate official academic mapping.
-
+  // Official academic mapping validation.
   if (
     normalize(mentorMaster.section) !== normalize(studentMaster.section) ||
     Number(mentorMaster.semester) !== Number(studentMaster.semester) ||
@@ -218,7 +224,12 @@ async function checkAuthority({
 }
 
 // ============================================================
-// BYPASSED INSTITUTIONAL ROLES
+// INSTITUTIONAL HIGHER-ROLE AUDIT
+//
+// These roles are NOT parent-consent bypasses.
+//
+// HOD/HOI direct approval may still record the
+// lower institutional roles not used.
 // ============================================================
 
 function getBypassedRoles(role) {
@@ -238,7 +249,7 @@ function getBypassedRoles(role) {
 }
 
 // ============================================================
-// PREVIOUS OUTPASS EXIT / ENTRY CHECK
+// PREVIOUS EXIT / ENTRY CHECK
 // ============================================================
 
 function isTripCompleted(trip) {
@@ -253,7 +264,7 @@ function isTripCompleted(trip) {
 }
 
 // ============================================================
-// GET APPROVED TRIPS FOR IST DATE
+// APPROVED TRIPS FOR IST DATE
 // ============================================================
 
 async function getPreviousTrips(outpass, dayKey, session) {
@@ -281,6 +292,7 @@ async function getPreviousTrips(outpass, dayKey, session) {
               $gte: start,
               $lt: end,
             },
+
             $or: [
               {
                 outpassDayIST: "",
@@ -326,15 +338,8 @@ async function getPreviousTrips(outpass, dayKey, session) {
 // ============================================================
 // MAIN UNIFIED APPROVAL SERVICE
 //
-// Accepts a trusted role from a protected controller.
-// NEVER trust a role sent directly in the request body.
-//
-// Supported:
-// - MENTOR
-// - BACKUP_MENTOR
-// - COORDINATOR
-// - HOD
-// - HOI
+// Trusted role comes from protected controller.
+// Never accept the approval role from request body.
 // ============================================================
 
 async function approveOutpassForRole(
@@ -348,7 +353,7 @@ async function approveOutpassForRole(
   const role = activeRole === "BACKUP_MENTOR" ? "MENTOR" : activeRole;
 
   // ----------------------------------------------------------
-  // STEP 1: VALIDATION
+  // STEP 1: INPUT VALIDATION
   // ----------------------------------------------------------
 
   if (!NORMAL_ROLES.includes(role)) {
@@ -384,9 +389,9 @@ async function approveOutpassForRole(
 
       const now = new Date();
 
-      // ------------------------------------------------------
+      // ----------------------------------------------------
       // STEP 3: LOAD OUTPASS
-      // ------------------------------------------------------
+      // ----------------------------------------------------
 
       const outpass = await Outpass.findOne({
         _id: outpassId,
@@ -398,23 +403,22 @@ async function approveOutpassForRole(
         return;
       }
 
-      // ------------------------------------------------------
-      // STEP 4: STATUS CHECK
-      // ------------------------------------------------------
+      // ----------------------------------------------------
+      // STEP 4: OUTPASS STATUS
+      // ----------------------------------------------------
 
       if (outpass.status !== OUTPASS_STATUS.PENDING) {
         errorMessage = "Only pending outpasses can be approved.";
         return;
       }
 
-      // ------------------------------------------------------
-      // STEP 5: PARENT STATUS
-      // ------------------------------------------------------
+      // ----------------------------------------------------
+      // STEP 5: PARENT CONSENT VALIDATION
+      // ----------------------------------------------------
 
       const parentStatus = outpass.parentDecision?.status || "PENDING";
 
-      // Explicit parent rejection is always blocking.
-
+      // Explicit parent rejection always blocks.
       if (
         parentStatus === "REJECTED" ||
         outpass.parentDecision?.callOutcome === "REJECTED"
@@ -436,8 +440,18 @@ async function approveOutpassForRole(
         return;
       }
 
-      // Parent step may be bypassed only if pending.
-      // This is faculty authorization, NOT parent consent.
+      // ====================================================
+      // IMPORTANT FIX
+      //
+      // Parent PENDING:
+      //   Requires an official written bypass reason.
+      //
+      // Parent APPROVED:
+      //   Does not require any bypass reason.
+      //
+      // Higher authority institutional approvals:
+      //   Recorded separately in audit metadata.
+      // ====================================================
 
       const parentBypassed = parentStatus === "PENDING";
 
@@ -445,16 +459,28 @@ async function approveOutpassForRole(
 
       const usedBypass = parentBypassed || bypassedRoles.length > 0;
 
-      // Every bypass needs a documented reason.
-
-      if (usedBypass && reason.length < 10) {
-        errorMessage = "Bypass requires a reason of at least 10 characters.";
+      // FIX: Reason validation depends on
+      // parent consent, not institutional role.
+      if (parentBypassed && reason.length < 10) {
+        errorMessage =
+          "Parent-pending bypass requires a reason of at least 10 characters.";
         return;
       }
 
-      // ------------------------------------------------------
+      // Automatically document normal approval
+      // so direct HOD/HOI decisions remain audited.
+      // Do not falsely mark the parent as pending.
+
+      const verifiedParentNote =
+        bypassedRoles.length > 0
+          ? `Direct ${role} approval under authorized academic scope; parent consent verified.`
+          : "Parent consent verified.";
+
+      const approvalNote = reason || (parentBypassed ? "" : verifiedParentNote);
+
+      // ----------------------------------------------------
       // STEP 6: FETCH FACULTY AND STUDENT
-      // ------------------------------------------------------
+      // ----------------------------------------------------
 
       const [faculty, studentMaster] = await Promise.all([
         Mentor.findById(facultyId).session(session),
@@ -476,9 +502,9 @@ async function approveOutpassForRole(
         return;
       }
 
-      // ------------------------------------------------------
-      // STEP 7: ACADEMIC MAPPING VALIDATION
-      // ------------------------------------------------------
+      // ----------------------------------------------------
+      // STEP 7: ACADEMIC MAPPING
+      // ----------------------------------------------------
 
       if (
         Number(studentMaster.semester) !== Number(outpass.semester) ||
@@ -491,9 +517,9 @@ async function approveOutpassForRole(
         return;
       }
 
-      // ------------------------------------------------------
-      // STEP 8: RESOLVE ACADEMIC SCOPES
-      // ------------------------------------------------------
+      // ----------------------------------------------------
+      // STEP 8: ACADEMIC SCOPES
+      // ----------------------------------------------------
 
       const context = await getAcademicContext(studentMaster);
 
@@ -502,9 +528,9 @@ async function approveOutpassForRole(
         return;
       }
 
-      // ------------------------------------------------------
-      // STEP 9: AUTHORIZATION
-      // ------------------------------------------------------
+      // ----------------------------------------------------
+      // STEP 9: AUTHORITY VERIFICATION
+      // ----------------------------------------------------
 
       const authorized = await checkAuthority({
         faculty,
@@ -517,14 +543,13 @@ async function approveOutpassForRole(
       });
 
       if (!authorized) {
-        errorMessage =
-          `Not authorized to approve this student's ` + `outpass as ${role}.`;
+        errorMessage = `Not authorized to approve this student's outpass as ${role}.`;
         return;
       }
 
-      // ------------------------------------------------------
-      // STEP 10: DAILY OUTPASS LIMIT
-      // ------------------------------------------------------
+      // ----------------------------------------------------
+      // STEP 10: DAILY OUTPASS QUOTA
+      // ----------------------------------------------------
 
       const dayKey = getISTDay(outpass.outDate);
 
@@ -542,9 +567,9 @@ async function approveOutpassForRole(
 
       const tripNumber = previousTrips.length + 1;
 
-      // ------------------------------------------------------
-      // STEP 11: QR VALIDITY AND GENERATION
-      // ------------------------------------------------------
+      // ----------------------------------------------------
+      // STEP 11: QR VALIDITY & GENERATION
+      // ----------------------------------------------------
 
       let qr;
 
@@ -556,12 +581,9 @@ async function approveOutpassForRole(
           return;
         }
 
-        // QR allowed after:
-        // 1. Verified parent approval OR
-        //    documented authorized parent bypass.
-        // 2. One authorized faculty approval.
-        //
-        // This path performs the faculty approval below.
+        // Existing signed QR mechanism preserved.
+        // Parent consent is already verified OR
+        // faculty-authorized pending bypass is audited.
 
         qr = createQRToken(outpass, now);
       } catch (error) {
@@ -569,15 +591,15 @@ async function approveOutpassForRole(
         return;
       }
 
-      // ------------------------------------------------------
-      // STEP 12: SNAPSHOT CURRENT STATE
-      // ------------------------------------------------------
+      // ----------------------------------------------------
+      // STEP 12: CURRENT ASSIGNMENT SNAPSHOT
+      // ----------------------------------------------------
 
       const currentAssignedRole = outpass.assignedRole || null;
 
-      // ------------------------------------------------------
-      // STEP 13: ATOMIC FILTER
-      // ------------------------------------------------------
+      // ----------------------------------------------------
+      // STEP 13: ATOMIC APPROVAL FILTER
+      // ----------------------------------------------------
 
       const filter = {
         _id: outpass._id,
@@ -610,9 +632,9 @@ async function approveOutpassForRole(
         filter["parentDecision.method"] = outpass.parentDecision.method;
       }
 
-      // ------------------------------------------------------
-      // STEP 14: APPROVAL WITH FULL AUDIT
-      // ------------------------------------------------------
+      // ----------------------------------------------------
+      // STEP 14: APPROVAL + AUDIT + QR
+      // ----------------------------------------------------
 
       const approved = await Outpass.findOneAndUpdate(
         filter,
@@ -626,8 +648,12 @@ async function approveOutpassForRole(
 
             approvedAt: now,
 
-            approvalRemark: reason,
+            // Reason optional when parent
+            // consent was verified.
+            approvalRemark: approvalNote,
 
+            // This field always records the
+            // REAL parent status.
             parentConsentAcknowledgement: {
               parentStatusAtApproval: parentStatus,
 
@@ -635,13 +661,19 @@ async function approveOutpassForRole(
 
               acknowledgedRole: role,
 
-              remark: parentBypassed
-                ? `FACULTY_AUTHORIZED_PARENT_BYPASS: ${reason}`
-                : "Parent consent verified.",
+              // Store original text without
+              // a prefix, respecting the
+              // schema's 500-character limit.
+              remark: parentBypassed ? reason : "Parent consent verified.",
 
               acknowledgedAt: now,
             },
 
+            // Higher institutional authority
+            // actions remain audited.
+            //
+            // This does NOT change
+            // parentDecision.status.
             approvalBypass: {
               used: usedBypass,
 
@@ -651,11 +683,7 @@ async function approveOutpassForRole(
 
               bypassedRoles,
 
-              reason: parentBypassed
-                ? `PARENT_PENDING_BYPASS: ${reason}`
-                : usedBypass
-                  ? reason
-                  : "",
+              reason: parentBypassed ? reason : usedBypass ? approvalNote : "",
 
               performedAt: usedBypass ? now : null,
             },
@@ -680,7 +708,10 @@ async function approveOutpassForRole(
           $push: {
             timeline: approvedEvent(
               faculty._id,
-              parentBypassed ? `Parent bypass by ${role}. ${reason}` : reason,
+
+              parentBypassed
+                ? `Parent bypass by ${role}. ${reason}`
+                : approvalNote,
             ),
           },
         },
@@ -717,7 +748,7 @@ async function approveOutpassForRole(
   }
 
   // ==========================================================
-  // STEP 15: VERIFY COMMITTED APPROVAL
+  // STEP 15: CHECK COMMITTED APPROVAL
   // ==========================================================
 
   if (!approvedId) {
@@ -776,10 +807,6 @@ async function approveOutpassForRole(
     data: updatedOutpass,
   };
 }
-
-// ============================================================
-// EXPORT
-// ============================================================
 
 module.exports = Object.freeze({
   approveOutpassForRole,

@@ -29,12 +29,17 @@ const {
 // REFRESH TOKEN COOKIE CONFIG
 // ==========================================
 
-const getRefreshCookieOptions = () => ({
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-  path: "/",
-});
+const getRefreshCookieOptions = () => {
+  const isDeployed =
+    process.env.VERCEL === "1" || process.env.NODE_ENV === "production";
+
+  return {
+    httpOnly: true,
+    secure: isDeployed,
+    sameSite: isDeployed ? "none" : "lax",
+    path: "/",
+  };
+};
 
 const clearRefreshCookie = (res) => {
   res.clearCookie("refreshToken", getRefreshCookieOptions());

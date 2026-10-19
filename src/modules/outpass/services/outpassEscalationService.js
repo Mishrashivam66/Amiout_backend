@@ -9,7 +9,17 @@ const Institute = require("../../academic/models/Institute");
 const Program = require("../../academic/models/Program");
 
 // ============================================================
-// CONFIGURATION
+// AMIOUT ENTERPRISE - OUTPASS AUTHORITY RESOLVER
+//
+// Initial assignment hierarchy:
+// PRIMARY MENTOR
+//   -> BACKUP MENTOR (if configured)
+//   -> COORDINATOR
+//   -> HOD
+//   -> HOI
+//
+// HOD & HOI availability are checked before assignment.
+// Scope matching supports stored spaces in department names.
 // ============================================================
 
 const QUERY_TIMEOUT_MS = 10000;
@@ -21,10 +31,6 @@ const ROLE_SCOPE_TYPES = Object.freeze({
   HOI: "INSTITUTE",
 });
 
-// ============================================================
-// GENERAL HELPERS
-// ============================================================
-
 const normalize = (value) =>
   String(value ?? "")
     .trim()
@@ -35,6 +41,9 @@ const normalizeScope = (value) => normalize(value).replace(/\s+/g, "");
 const getId = (value) => String(value?._id || value || "");
 
 const sameId = (a, b) => Boolean(getId(a)) && getId(a) === getId(b);
+
+const escapeRegex = (value) =>
+  String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 const fail = (message) => ({
   success: false,
@@ -49,8 +58,9 @@ const success = (faculty, assignedRole, reason) => ({
 });
 
 // ============================================================
-// CHECK ACCOUNT AVAILABILITY
-// Applies to ALL roles on that faculty account.
+// FACULTY ACCOUNT AVAILABILITY
+//
+// Only AVAILABLE faculty can receive new assignments.
 // ============================================================
 
 const isAvailable = (faculty) =>
@@ -58,11 +68,11 @@ const isAvailable = (faculty) =>
     faculty &&
     faculty.isActive === true &&
     faculty.isVerified === true &&
-    faculty.availabilityStatus === "AVAILABLE",
+    normalize(faculty.availabilityStatus) === "AVAILABLE",
   );
 
 // ============================================================
-// ACTIVE FACULTY ROLE ASSIGNMENTS
+// ACTIVE ROLE ASSIGNMENTS
 // ============================================================
 
 const getActiveAssignments = (faculty, now) => {
@@ -78,7 +88,7 @@ const getActiveAssignments = (faculty, now) => {
 };
 
 // ============================================================
-// STRICT ROLE + SCOPE AUTHORIZATION
+// STRICT FACULTY ROLE & EXACT SCOPE
 // ============================================================
 
 const hasExactScope = (faculty, role, expectedScope, now = new Date()) => {
@@ -100,24 +110,24 @@ const hasExactScope = (faculty, role, expectedScope, now = new Date()) => {
     return false;
   }
 
-  const expected = normalizeScope(expectedScope);
+  const requiredScope = normalizeScope(expectedScope);
 
   return getActiveAssignments(faculty, now).some((assignment) => {
     return (
       normalize(assignment.role) === normalizedRole &&
       normalize(assignment.scopeType) === ROLE_SCOPE_TYPES[normalizedRole] &&
-      normalizeScope(assignment.scopeId) === expected
+      normalizeScope(assignment.scopeId) === requiredScope
     );
   });
 };
 
 // ============================================================
-// OFFICIAL ACADEMIC SCOPES
+// OFFICIAL ACADEMIC SCOPE BUILDER
 //
-// MENTOR:      ASET/B.TECH-CSE/7/C/C1
+// MENTOR: ASET/B.TECH-CSE/7/C/C1
 // COORDINATOR: ASET/B.TECH-CSE/7/C
-// HOD:         ASET/DEPARTMENT_CODE
-// HOI:         ASET
+// HOD: ASET/COMPUTER SCIENCE AND ENGINEERING
+// HOI: ASET
 // ============================================================
 
 const buildScopes = ({ institute, program, studentMaster }) => {
@@ -157,7 +167,6 @@ const buildScopes = ({ institute, program, studentMaster }) => {
 
     coordinator: `${instituteCode}/${programCode}/` + `${semester}/${section}`,
 
-    // No HOD matching without official department
     hod: departmentCode ? `${instituteCode}/${departmentCode}` : null,
 
     hoi: instituteCode,
@@ -165,7 +174,7 @@ const buildScopes = ({ institute, program, studentMaster }) => {
 };
 
 // ============================================================
-// VALIDATE OFFICIAL STUDENT ACADEMIC MAPPING
+// VALIDATE STUDENT OFFICIAL ACADEMIC MAPPING
 // ============================================================
 
 const getAcademicContext = async (studentMaster) => {
@@ -201,10 +210,6 @@ const getAcademicContext = async (studentMaster) => {
     return null;
   }
 
-  // ----------------------------------------------------------
-  // VERIFY STUDENTMASTER AGAINST GROUP MASTER
-  // ----------------------------------------------------------
-
   const mappingValid =
     sameId(program.institute, institute._id) &&
     sameId(group.institute, institute._id) &&
@@ -224,10 +229,6 @@ const getAcademicContext = async (studentMaster) => {
 
     return null;
   }
-
-  // ----------------------------------------------------------
-  // SINGLE CENTRALIZED SCOPE GENERATOR
-  // ----------------------------------------------------------
 
   const scopes = buildScopes({
     institute,
@@ -274,10 +275,6 @@ const getMappedMentor = async ({
     return null;
   }
 
-  // ----------------------------------------------------------
-  // EXACT ACADEMIC MAPPING
-  // ----------------------------------------------------------
-
   const sameAcademicDetails =
     normalizeScope(master.institute) === normalizeScope(institute.code) &&
     normalizeScope(master.program) === normalizeScope(program.code) &&
@@ -300,10 +297,6 @@ const getMappedMentor = async ({
     return null;
   }
 
-  // ----------------------------------------------------------
-  // LINKED FACULTY LOGIN ACCOUNT
-  // ----------------------------------------------------------
-
   const faculty = await Mentor.findById(master.mentorUser).maxTimeMS(
     QUERY_TIMEOUT_MS,
   );
@@ -312,9 +305,7 @@ const getMappedMentor = async ({
     return null;
   }
 
-  // Account must correspond to official master email.
-  // Do not link another faculty merely by ObjectId.
-
+  // Securely verify linked account ownership.
   const emailMatches =
     Boolean(master.mentorEmail) &&
     String(master.mentorEmail).trim().toLowerCase() ===
@@ -326,11 +317,6 @@ const getMappedMentor = async ({
     return null;
   }
 
-  // ----------------------------------------------------------
-  // EXPECTED GROUP SCOPE
-  // Backup uses its authorized mentor group.
-  // ----------------------------------------------------------
-
   const expectedScope = [
     normalizeScope(master.institute),
     normalizeScope(master.program),
@@ -340,7 +326,7 @@ const getMappedMentor = async ({
   ].join("/");
 
   const available =
-    master.availabilityStatus === "AVAILABLE" &&
+    normalize(master.availabilityStatus) === "AVAILABLE" &&
     isAvailable(faculty) &&
     hasExactScope(faculty, "MENTOR", expectedScope, now);
 
@@ -354,8 +340,19 @@ const getMappedMentor = async ({
 // ============================================================
 // SUPERIOR AUTHORITY LOOKUP
 //
-// Only fetch faculty with active matching role assignment.
-// Do not fetch entire faculty collection.
+// FIX:
+// MongoDB scopeId can contain spaces:
+//
+// ASET/COMPUTER SCIENCE AND ENGINEERING
+//
+// Expected normalized scope:
+//
+// ASET/COMPUTERSCIENCEANDENGINEERING
+//
+// Database query selects same-institute candidates.
+// Final role/scope validation is ALWAYS exact.
+//
+// No arbitrary 20-faculty cap.
 // ============================================================
 
 const findSuperior = async ({ role, scope, now = new Date() }) => {
@@ -369,13 +366,23 @@ const findSuperior = async ({ role, scope, now = new Date() }) => {
     };
   }
 
-  // Scope IDs must use canonical format.
-  // $elemMatch ensures role, scope and active flag
-  // belong to the same assignment.
+  const instituteCode = expectedScope.split("/")[0];
 
-  const candidates = await Mentor.find({
+  if (!instituteCode) {
+    return {
+      faculty: null,
+      ambiguous: false,
+    };
+  }
+
+  // Same-institute candidate narrowing, not authorization.
+  const institutePattern =
+    normalizedRole === "HOI"
+      ? new RegExp(`^\\s*${escapeRegex(instituteCode)}\\s*$`, "i")
+      : new RegExp(`^\\s*${escapeRegex(instituteCode)}\\s*\\/`, "i");
+
+  const query = {
     roles: normalizedRole,
-
     isActive: true,
     isVerified: true,
     availabilityStatus: "AVAILABLE",
@@ -384,45 +391,56 @@ const findSuperior = async ({ role, scope, now = new Date() }) => {
       $elemMatch: {
         role: normalizedRole,
         scopeType: ROLE_SCOPE_TYPES[normalizedRole],
-        scopeId: expectedScope,
         isActive: true,
+
+        scopeId: {
+          $regex: institutePattern,
+        },
       },
     },
-  })
-    .limit(20)
-    .maxTimeMS(QUERY_TIMEOUT_MS);
+  };
 
-  // Recheck startsAt / expiresAt and exact scope
+  let matchedFaculty = null;
+  let matchCount = 0;
 
-  const matches = candidates.filter((faculty) =>
-    hasExactScope(faculty, normalizedRole, expectedScope, now),
-  );
+  // Cursor avoids truncating authorized results.
+  const cursor = Mentor.find(query).maxTimeMS(QUERY_TIMEOUT_MS).cursor();
 
-  if (matches.length > 1) {
-    return {
-      faculty: null,
-      ambiguous: true,
-    };
+  try {
+    for await (const faculty of cursor) {
+      if (!hasExactScope(faculty, normalizedRole, expectedScope, now)) {
+        continue;
+      }
+
+      matchedFaculty = faculty;
+      matchCount += 1;
+
+      // Multiple valid authorities are ambiguous.
+      // Never choose a random faculty account.
+      if (matchCount > 1) {
+        return {
+          faculty: null,
+          ambiguous: true,
+        };
+      }
+    }
+  } finally {
+    await cursor.close();
   }
 
   return {
-    faculty: matches[0] || null,
+    faculty: matchedFaculty,
     ambiguous: false,
   };
 };
 
 // ============================================================
-// MAIN APPROVAL AUTHORITY RESOLVER
+// ASSIGN THE NEXT AVAILABLE FACULTY
 //
-// Strict precedence:
 // PRIMARY -> BACKUP -> COORDINATOR -> HOD -> HOI
 // ============================================================
 
 const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
-  // ----------------------------------------------------------
-  // 1. VERIFY ACADEMIC CONTEXT
-  // ----------------------------------------------------------
-
   const context = await getAcademicContext(studentMaster);
 
   if (!context) {
@@ -432,12 +450,11 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
   const { institute, program, scopes } = context;
 
   // ----------------------------------------------------------
-  // 2. PRIMARY MENTOR
+  // PRIMARY MENTOR
   // ----------------------------------------------------------
 
   const primary = await getMappedMentor({
     mentorMasterId: studentMaster.primaryMentor,
-
     institute,
     program,
     studentMaster,
@@ -456,16 +473,8 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
   }
 
   // ----------------------------------------------------------
-  // 3. BACKUP MENTOR
+  // OPTIONAL BACKUP MENTOR
   // ----------------------------------------------------------
-
-  // ============================================================
-  // 3. OPTIONAL BACKUP MENTOR
-  // ============================================================
-
-  // Primary Mentor unavailable hai toh Backup Mentor check hoga.
-  // Backup Mentor optional hai.
-  // Backup assigned nahi hai toh Coordinator check hoga.
 
   if (studentMaster.backupMentor) {
     const backup = await getMappedMentor({
@@ -483,14 +492,12 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
       );
     }
 
-    // Primary and Backup cannot be the same faculty
     if (sameId(primary.faculty._id, backup.faculty._id)) {
       return fail(
         "Primary and Backup Mentor cannot be the same faculty account.",
       );
     }
 
-    // If Backup Mentor is available, assign the request
     if (backup.available) {
       return success(
         backup.faculty,
@@ -500,14 +507,9 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
     }
   }
 
-  // ============================================================
-  // 4. COORDINATOR FALLBACK
-  // ============================================================
-
-  // Primary and authorized Backup Mentor are unavailable,
-  // or no Backup Mentor is assigned.
-  // Coordinator becomes the initial assigned authority.
-  // Higher authorities can still approve directly by scope.
+  // ----------------------------------------------------------
+  // COORDINATOR
+  // ----------------------------------------------------------
 
   const coordinator = await findSuperior({
     role: "COORDINATOR",
@@ -527,11 +529,8 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
     );
   }
 
-  // If Coordinator is not available,
-  // continue to the existing HOD fallback below.
-
   // ----------------------------------------------------------
-  // 5. HOD
+  // HOD
   // ----------------------------------------------------------
 
   if (!scopes.hod) {
@@ -555,7 +554,7 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
   }
 
   // ----------------------------------------------------------
-  // 6. HOI
+  // HOI
   // ----------------------------------------------------------
 
   const hoi = await findSuperior({

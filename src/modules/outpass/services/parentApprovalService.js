@@ -423,17 +423,29 @@ const submitParentDecision = async (token, decision) => {
     // ========================================================
 
     const updates = {
+      // Parent decision
       "parentDecision.status": normalizedDecision,
       "parentDecision.method": "SMS_LINK",
       "parentDecision.decidedAt": now,
       "parentDecision.tokenUsedAt": now,
 
+      // If parent rejects, immediately reject the outpass
+      ...(normalizedDecision === "REJECTED"
+        ? {
+            status: "REJECTED",
+            rejectedAt: now,
+            rejectionRemark: "Outpass rejected by parent.",
+          }
+        : {}),
+
+      // QR details
       qrGenerated: Boolean(qr),
       qrGeneratedAt: qr?.qrGeneratedAt || null,
       qrToken: qr?.token || null,
       qrValidFrom: qr?.qrValidFrom || null,
       qrExpiresAt: qr?.qrExpiresAt || null,
 
+      // Revoke QR when parent rejects
       qrRevokedAt: normalizedDecision === "REJECTED" ? now : null,
     };
 
@@ -550,11 +562,13 @@ const submitParentDecision = async (token, decision) => {
       parentStatus: updated.parentDecision.status,
 
       facultyApprovalStatus:
-        updated.status === "APPROVED" &&
-        Boolean(updated.approvedAt) &&
-        Boolean(updated.approvedByFaculty)
-          ? "APPROVED"
-          : "PENDING",
+        normalizedDecision === "REJECTED"
+          ? "BLOCKED"
+          : updated.status === "APPROVED" &&
+              Boolean(updated.approvedAt) &&
+              Boolean(updated.approvedByFaculty)
+            ? "APPROVED"
+            : "PENDING",
 
       qrGenerated: updated.qrGenerated === true,
       qrStatus,

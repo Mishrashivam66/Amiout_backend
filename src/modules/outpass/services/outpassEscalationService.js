@@ -174,8 +174,7 @@ const getAcademicContext = async (studentMaster) => {
     !studentMaster.institute ||
     !studentMaster.program ||
     !studentMaster.mentorGroup ||
-    !studentMaster.primaryMentor ||
-    !studentMaster.backupMentor
+    !studentMaster.primaryMentor
   ) {
     return null;
   }
@@ -211,7 +210,10 @@ const getAcademicContext = async (studentMaster) => {
     sameId(group.institute, institute._id) &&
     sameId(group.program, program._id) &&
     sameId(group.primaryMentor, studentMaster.primaryMentor) &&
-    sameId(group.backupMentor, studentMaster.backupMentor) &&
+    ((!group.backupMentor && !studentMaster.backupMentor) ||
+      (group.backupMentor &&
+        studentMaster.backupMentor &&
+        sameId(group.backupMentor, studentMaster.backupMentor))) &&
     Number(group.semester) === Number(studentMaster.semester) &&
     normalize(group.section) === normalize(studentMaster.section) &&
     normalize(group.groupName) === normalize(studentMaster.group) &&
@@ -457,39 +459,55 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
   // 3. BACKUP MENTOR
   // ----------------------------------------------------------
 
-  const backup = await getMappedMentor({
-    mentorMasterId: studentMaster.backupMentor,
+  // ============================================================
+  // 3. OPTIONAL BACKUP MENTOR
+  // ============================================================
 
-    institute,
-    program,
-    studentMaster,
-    now,
-    isBackup: true,
-  });
+  // Primary Mentor unavailable hai toh Backup Mentor check hoga.
+  // Backup Mentor optional hai.
+  // Backup assigned nahi hai toh Coordinator check hoga.
 
-  if (!backup) {
-    return fail(
-      "Backup Mentor academic mapping or account linking is invalid.",
-    );
+  if (studentMaster.backupMentor) {
+    const backup = await getMappedMentor({
+      mentorMasterId: studentMaster.backupMentor,
+      institute,
+      program,
+      studentMaster,
+      now,
+      isBackup: true,
+    });
+
+    if (!backup) {
+      return fail(
+        "Backup Mentor academic mapping or account linking is invalid.",
+      );
+    }
+
+    // Primary and Backup cannot be the same faculty
+    if (sameId(primary.faculty._id, backup.faculty._id)) {
+      return fail(
+        "Primary and Backup Mentor cannot be the same faculty account.",
+      );
+    }
+
+    // If Backup Mentor is available, assign the request
+    if (backup.available) {
+      return success(
+        backup.faculty,
+        "BACKUP_MENTOR",
+        "PRIMARY_MENTOR_UNAVAILABLE",
+      );
+    }
   }
 
-  if (sameId(primary.faculty._id, backup.faculty._id)) {
-    return fail(
-      "Primary and Backup Mentor cannot be the same faculty account.",
-    );
-  }
+  // ============================================================
+  // 4. COORDINATOR FALLBACK
+  // ============================================================
 
-  if (backup.available) {
-    return success(
-      backup.faculty,
-      "BACKUP_MENTOR",
-      "PRIMARY_MENTOR_UNAVAILABLE",
-    );
-  }
-
-  // ----------------------------------------------------------
-  // 4. COORDINATOR
-  // ----------------------------------------------------------
+  // Primary and authorized Backup Mentor are unavailable,
+  // or no Backup Mentor is assigned.
+  // Coordinator becomes the initial assigned authority.
+  // Higher authorities can still approve directly by scope.
 
   const coordinator = await findSuperior({
     role: "COORDINATOR",
@@ -508,6 +526,9 @@ const resolveOutpassAuthority = async ({ studentMaster, now = new Date() }) => {
       "BOTH_MENTORS_UNAVAILABLE",
     );
   }
+
+  // If Coordinator is not available,
+  // continue to the existing HOD fallback below.
 
   // ----------------------------------------------------------
   // 5. HOD

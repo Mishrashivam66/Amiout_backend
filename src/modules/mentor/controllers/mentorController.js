@@ -5,15 +5,18 @@ const asyncHandler = require("express-async-handler");
 const mentorDashboardService = require("../services/mentorDashboardService");
 
 const outpassService = require("../../outpass/services");
+
 const coordinatorOutpassService = require("../services/coordinatorOutpassService");
-// ============================================================
-// HELPERS
-// ============================================================
+
 const {
   approveOutpassForRole,
 } = require("../../outpass/services/sharedApprovalService");
 
 const facultyScopeOutpassService = require("../services/facultyScopeOutpassService");
+
+// ============================================================
+// COMMON HELPERS
+// ============================================================
 
 const getFacultyId = (req) => req.user?._id || req.user?.id;
 
@@ -44,83 +47,127 @@ const getCoordinatorDashboard = asyncHandler(async (req, res) => {
 });
 
 // ============================================================
-// MENTOR PENDING OUTPASSES
+// MENTOR PENDING REQUESTS
 // ============================================================
 
 const getPendingRequests = asyncHandler(async (req, res) => {
-  const page = Number(req.query.page) || 1;
-  const limit = Number(req.query.limit) || 10;
-  const search = req.query.search || "";
-
   const result = await mentorDashboardService.getPendingRequests(
     getFacultyId(req),
-    page,
-    limit,
-    search,
+    Number(req.query.page) || 1,
+    Number(req.query.limit) || 10,
+    req.query.search || "",
   );
 
   return res.status(200).json(result);
 });
 
 // ============================================================
-// MENTOR APPROVED OUTPASSES
+// MENTOR APPROVED REQUESTS
 // ============================================================
 
 const getApprovedRequests = asyncHandler(async (req, res) => {
-  const page = Number(req.query.page) || 1;
-  const limit = Number(req.query.limit) || 10;
-
   const result = await mentorDashboardService.getApprovedRequests(
     getFacultyId(req),
-    page,
-    limit,
+    Number(req.query.page) || 1,
+    Number(req.query.limit) || 10,
   );
 
   return res.status(200).json(result);
 });
 
 // ============================================================
-// MENTOR REJECTED OUTPASSES
+// MENTOR REJECTED REQUESTS
 // ============================================================
 
 const getRejectedRequests = asyncHandler(async (req, res) => {
-  const page = Number(req.query.page) || 1;
-  const limit = Number(req.query.limit) || 10;
-
   const result = await mentorDashboardService.getRejectedRequests(
     getFacultyId(req),
-    page,
-    limit,
+    Number(req.query.page) || 1,
+    Number(req.query.limit) || 10,
   );
 
   return res.status(200).json(result);
 });
 
 // ============================================================
-// APPROVE OUTPASS
-// Existing mentor approval logic preserved.
+// COMMON AUTHORIZED APPROVAL HANDLER
+//
+// Role comes from the protected backend route.
+// Never accept an arbitrary role from req.body.
 // ============================================================
 
-const approveOutpass = asyncHandler(async (req, res) => {
-  const result = await outpassService.approveOutpass(
-    getFacultyId(req),
-    req.params.outpassId,
-    req.body.remark,
-  );
+const approveForRole = (role) =>
+  asyncHandler(async (req, res) => {
+    const facultyId = getFacultyId(req);
 
-  return sendServiceResult(res, result, 400);
-});
+    if (!facultyId) {
+      return res.status(401).json({
+        success: false,
+        message: "Faculty authentication required.",
+      });
+    }
+
+    const remark =
+      typeof req.body?.remark === "string" ? req.body.remark.trim() : "";
+
+    const result = await approveOutpassForRole(
+      facultyId,
+      req.params.outpassId,
+      remark,
+      role,
+    );
+
+    return sendServiceResult(res, result, 400);
+  });
+
+// ============================================================
+// MENTOR APPROVAL
+//
+// Handles mapped Primary / Backup Mentor.
+// The shared service checks assignment and scope.
+// ============================================================
+
+const approveOutpass = approveForRole("MENTOR");
+
+// ============================================================
+// COORDINATOR APPROVAL
+//
+// Coordinator can directly approve requests
+// belonging to their authorized section.
+// ============================================================
+
+const approveAsCoordinator = approveForRole("COORDINATOR");
+
+// ============================================================
+// HOD APPROVAL
+//
+// HOD can directly approve requests belonging
+// to their authorized department.
+// ============================================================
+
+const approveAsHOD = approveForRole("HOD");
+
+// ============================================================
+// HOI APPROVAL
+//
+// HOI can directly approve requests belonging
+// to their authorized institute.
+// ============================================================
+
+const approveAsHOI = approveForRole("HOI");
 
 // ============================================================
 // REJECT OUTPASS
-// Existing mentor rejection logic preserved.
+//
+// Existing rejection service preserved for now.
+// Separate role-scoped rejection review is needed.
 // ============================================================
 
 const rejectOutpass = asyncHandler(async (req, res) => {
   const result = await outpassService.rejectOutpass(
     getFacultyId(req),
     req.params.outpassId,
-    req.body.remark,
+    req.body?.remark || "",
   );
 
   return sendServiceResult(res, result, 400);
@@ -166,22 +213,18 @@ const getStudentDetails = asyncHandler(async (req, res) => {
 // ============================================================
 
 const getHistory = asyncHandler(async (req, res) => {
-  const page = Number(req.query.page) || 1;
-  const limit = Number(req.query.limit) || 10;
-  const search = req.query.search || "";
-
   const result = await mentorDashboardService.getHistory(
     getFacultyId(req),
-    page,
-    limit,
-    search,
+    Number(req.query.page) || 1,
+    Number(req.query.limit) || 10,
+    req.query.search || "",
   );
 
   return res.status(200).json(result);
 });
 
 // ============================================================
-// OUTPASS DETAILS
+// MENTOR OUTPASS DETAILS
 // ============================================================
 
 const getOutpassDetails = asyncHandler(async (req, res) => {
@@ -195,7 +238,6 @@ const getOutpassDetails = asyncHandler(async (req, res) => {
 
 // ============================================================
 // LEGACY UNLOCK STUDENT
-// Preserved for existing integrations.
 // ============================================================
 
 const unlockStudent = asyncHandler(async (req, res) => {
@@ -208,7 +250,7 @@ const unlockStudent = asyncHandler(async (req, res) => {
 });
 
 // ============================================================
-// LEGACY UPDATE PROFILE
+// UPDATE PROFILE
 // ============================================================
 
 const updateProfile = asyncHandler(async (req, res) => {
@@ -225,6 +267,8 @@ const updateProfile = asyncHandler(async (req, res) => {
 
 // ============================================================
 // UPDATE FACULTY AVAILABILITY
+//
+// Existing faculty availability service preserved.
 // ============================================================
 
 const updateAvailability = asyncHandler(async (req, res) => {
@@ -257,7 +301,7 @@ const updateAvailability = asyncHandler(async (req, res) => {
 });
 
 // ============================================================
-// GET OFFICIAL FACULTY PROFILE
+// FACULTY PROFILE
 // ============================================================
 
 const getProfile = asyncHandler(async (req, res) => {
@@ -276,8 +320,9 @@ const getProfile = asyncHandler(async (req, res) => {
 });
 
 // ============================================================
-// EXPORTS
+// COORDINATOR PENDING REQUESTS
 // ============================================================
+
 const getCoordinatorPendingRequests = asyncHandler(async (req, res) => {
   const result = await coordinatorOutpassService.getCoordinatorPendingRequests(
     getFacultyId(req),
@@ -288,6 +333,10 @@ const getCoordinatorPendingRequests = asyncHandler(async (req, res) => {
 
   return sendServiceResult(res, result);
 });
+
+// ============================================================
+// COORDINATOR HISTORY
+// ============================================================
 
 const getCoordinatorHistory = asyncHandler(async (req, res) => {
   const result = await coordinatorOutpassService.getCoordinatorHistory(
@@ -300,6 +349,10 @@ const getCoordinatorHistory = asyncHandler(async (req, res) => {
   return sendServiceResult(res, result);
 });
 
+// ============================================================
+// COORDINATOR OUTPASS DETAILS
+// ============================================================
+
 const getCoordinatorOutpassDetails = asyncHandler(async (req, res) => {
   const result = await coordinatorOutpassService.getCoordinatorOutpassDetails(
     getFacultyId(req),
@@ -309,27 +362,9 @@ const getCoordinatorOutpassDetails = asyncHandler(async (req, res) => {
   return sendServiceResult(res, result, 404);
 });
 
-const approveAsHOD = asyncHandler(async (req, res) => {
-  const result = await approveOutpassForRole(
-    getFacultyId(req),
-    req.params.outpassId,
-    typeof req.body?.remark === "string" ? req.body.remark.trim() : "",
-    "HOD",
-  );
-
-  return sendServiceResult(res, result, 400);
-});
-
-const approveAsHOI = asyncHandler(async (req, res) => {
-  const result = await approveOutpassForRole(
-    getFacultyId(req),
-    req.params.outpassId,
-    typeof req.body?.remark === "string" ? req.body.remark.trim() : "",
-    "HOI",
-  );
-
-  return sendServiceResult(res, result, 400);
-});
+// ============================================================
+// HOD - ALL DEPARTMENT OUTPASSES
+// ============================================================
 
 const getHODOutpasses = asyncHandler(async (req, res) => {
   const result = await facultyScopeOutpassService.listOutpasses(
@@ -341,6 +376,10 @@ const getHODOutpasses = asyncHandler(async (req, res) => {
   return sendServiceResult(res, result);
 });
 
+// ============================================================
+// HOI - ALL INSTITUTE OUTPASSES
+// ============================================================
+
 const getHOIOutpasses = asyncHandler(async (req, res) => {
   const result = await facultyScopeOutpassService.listOutpasses(
     getFacultyId(req),
@@ -350,6 +389,10 @@ const getHOIOutpasses = asyncHandler(async (req, res) => {
 
   return sendServiceResult(res, result);
 });
+
+// ============================================================
+// HOD OUTPASS DETAILS
+// ============================================================
 
 const getHODOutpassDetails = asyncHandler(async (req, res) => {
   const result = await facultyScopeOutpassService.getOutpassDetails(
@@ -361,6 +404,10 @@ const getHODOutpassDetails = asyncHandler(async (req, res) => {
   return sendServiceResult(res, result, 404);
 });
 
+// ============================================================
+// HOI OUTPASS DETAILS
+// ============================================================
+
 const getHOIOutpassDetails = asyncHandler(async (req, res) => {
   const result = await facultyScopeOutpassService.getOutpassDetails(
     getFacultyId(req),
@@ -371,16 +418,27 @@ const getHOIOutpassDetails = asyncHandler(async (req, res) => {
   return sendServiceResult(res, result, 404);
 });
 
+// ============================================================
+// EXPORTS
+// ============================================================
+
 module.exports = Object.freeze({
   // Dashboards
   getDashboard,
   getCoordinatorDashboard,
 
-  // Requests
+  // Outpass lists
   getPendingRequests,
   getApprovedRequests,
   getRejectedRequests,
+
+  // Faculty approvals
   approveOutpass,
+  approveAsCoordinator,
+  approveAsHOD,
+  approveAsHOI,
+
+  // Rejection
   rejectOutpass,
 
   // Students
@@ -396,12 +454,12 @@ module.exports = Object.freeze({
   getCoordinatorHistory,
   getCoordinatorOutpassDetails,
 
-  // Faculty profile
+  // Profile
   getProfile,
   updateProfile,
   updateAvailability,
-  approveAsHOD,
-  approveAsHOI,
+
+  // HOD/HOI monitoring
   getHODOutpasses,
   getHOIOutpasses,
   getHODOutpassDetails,

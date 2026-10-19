@@ -30,7 +30,11 @@ router.get(
 );
 
 // Approval: existing service validates actual assigned authority
-router.patch("/outpass/:outpassId/approve", mentorController.approveOutpass);
+
+router.patch(
+  "/outpass/:outpassId/approve",
+  mentorController.approveAsCoordinator,
+);
 
 // Profile
 router.get("/profile", mentorController.getProfile);

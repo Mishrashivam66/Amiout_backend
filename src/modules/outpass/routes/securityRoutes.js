@@ -16,22 +16,56 @@ const {
   verifyEntryController,
 } = require("../controllers/securityController");
 
-// Require valid login.
+const {
+  getSecurityProfile,
+  getSecurityGateHistory,
+} = require("../controllers/securityAccountController");
+
+// ============================================================
+// SECURITY AUTHENTICATION
+// ============================================================
+
+// Valid login required.
 router.use(protect);
 
-// Require password setup.
+// First-login password setup required.
 router.use(requirePasswordSetupComplete);
 
-// Only Security Guard.
+// Only authorized Security accounts.
 router.use(requireRoles("SECURITY"));
 
-// SCAN QR -> VIEW DETAILS ONLY.
+// ============================================================
+// SECURITY PROFILE
+// ============================================================
+
+router.get("/profile", getSecurityProfile);
+
+// ============================================================
+// SECURITY GATE HISTORY
+// ============================================================
+
+router.get("/history", getSecurityGateHistory);
+
+// ============================================================
+// QR SCAN - READ ONLY PREVIEW
+// ============================================================
+
 router.post("/:id/preview", previewOutpassController);
 
-// CONFIRM EXIT.
+// ============================================================
+// CONFIRM EXIT
+// ============================================================
+
 router.patch("/:id/verify-exit", verifyExitController);
 
-// CONFIRM ENTRY.
+// ============================================================
+// CONFIRM ENTRY
+// ============================================================
+
 router.patch("/:id/verify-entry", verifyEntryController);
+
+// ============================================================
+// EXPORT
+// ============================================================
 
 module.exports = router;

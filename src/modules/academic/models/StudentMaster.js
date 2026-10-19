@@ -163,12 +163,13 @@ const studentMasterSchema = new mongoose.Schema(
     },
 
     // ============================================================
-    // Registration Status
+    // Admin-Provisioned Account Compatibility
+    // Registration form is no longer used.
     // ============================================================
 
     isRegistered: {
       type: Boolean,
-      default: false,
+      default: true,
       index: true,
     },
 

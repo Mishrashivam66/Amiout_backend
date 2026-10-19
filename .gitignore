@@ -108,7 +108,7 @@ playwright-report/
 *.tgz
 *.bak
 
-
+.env.superadmin
 
 .local/
 .env

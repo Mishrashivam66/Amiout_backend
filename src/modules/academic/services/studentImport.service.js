@@ -127,8 +127,6 @@ const resolveInstitute = async (instituteCode) => {
       isDeleted: false,
     });
 
-
-
     return institute;
   } catch (error) {
     // Handle concurrent imports.
@@ -238,7 +236,7 @@ const buildStudentPayload = (student, instituteId, programId) => {
 
     group: student.group ? normalizeCode(student.group) : null,
 
-    isRegistered: false,
+    isRegistered: true,
     isActive: true,
   };
 };
